@@ -1,0 +1,10 @@
+secrets.sh
+venv/
+__pycache__/
+*.pyc
+jobs_*.csv
+review*/
+*.log
+.seen_jobs.txt
+.processed_urls.txt
+.DS_Store
