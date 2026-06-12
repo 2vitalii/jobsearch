@@ -1,5 +1,6 @@
-# --- secrets ---
+# --- secrets / PII ---
 secrets.sh
+master_cv.md
 
 # --- python env / build ---
 venv/
