@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-job_finder.py — сбор вакансий из ВСЕХ доступных источников:
+jobsearch.finder — сбор вакансий из ВСЕХ доступных источников:
   • JobSpy: LinkedIn, Indeed, Google — по списку стран с remote
   • RemoteOK (API), We Work Remotely (RSS), Remotive (API) — worldwide-remote
   • ATS компаний: Greenhouse / Lever / Ashby — прямые вакансии работодателя
-Всё с полными описаниями для ATS-тюнинга в pipeline.py.
+Всё с полными описаниями для ATS-тюнинга в jobsearch.pipeline.
 
 Запуск:
-  pip install python-jobspy feedparser requests
-  python job_finder.py            # за неделю (168ч)
-  python job_finder.py 24         # за последние 24 часа
-  python job_finder.py 6          # за последние 6 часов (свежак / мало откликов)
+  pip install -e .
+  python -m jobsearch.finder            # за неделю (168ч)
+  python -m jobsearch.finder 24         # за последние 24 часа
+  python -m jobsearch.finder 6          # за последние 6 часов (свежак / мало откликов)
 """
 
 import csv

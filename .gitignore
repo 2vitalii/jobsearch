@@ -1,10 +1,26 @@
+# --- secrets ---
 secrets.sh
+
+# --- python env / build ---
 venv/
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# --- runtime artifacts (генерируются прогоном, в репо не нужны) ---
 jobs_*.csv
 review*/
+applications.csv
 *.log
 .seen_jobs.txt
 .processed_urls.txt
+
+# --- Claude Mind memory ---
+.claude/mind.mv2
+.claude/mind.mv2.lock
+
+# --- OS ---
 .DS_Store

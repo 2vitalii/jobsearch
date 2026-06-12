@@ -3,8 +3,8 @@
 # выбирает свежий CSV и папку вывода. Просто запусти:  bash run.sh
 # Можно сразу с режимом:  bash run.sh 1 | bash run.sh 2 | bash run.sh 3
 
-# --- встаём в папку скрипта (где бы он ни лежал) ---
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# --- встаём в корень репозитория (скрипт лежит в scripts/) ---
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR" || exit 1
 
 # --- venv ---
@@ -44,29 +44,29 @@ freshest_csv() { ls -t jobs_*.csv 2>/dev/null | head -1; }
 case "$MODE" in
   1|all)
     echo "=== $(ts) РЕЖИМ 1: все вакансии (168ч), весь пул ===" | tee -a run.log
-    python job_finder.py        2>&1 | tee -a run.log
-    python pipeline.py          2>&1 | tee -a run.log
+    python -m jobsearch.finder        2>&1 | tee -a run.log
+    python -m jobsearch.pipeline          2>&1 | tee -a run.log
     OUT="review"
     ;;
   2|24h)
     echo "=== $(ts) РЕЖИМ 2: за 24 часа ===" | tee -a run.log
-    python job_finder.py 24      2>&1 | tee -a run.log
+    python -m jobsearch.finder 24      2>&1 | tee -a run.log
     CSV="$(freshest_csv)"
-    python pipeline.py "$CSV" review_24h  2>&1 | tee -a run.log
+    python -m jobsearch.pipeline "$CSV" review_24h  2>&1 | tee -a run.log
     OUT="review_24h"
     ;;
   3|fresh)
     echo "=== $(ts) РЕЖИМ 3: свежие / мало откликов (6ч) ===" | tee -a run.log
-    python job_finder.py 6       2>&1 | tee -a run.log
+    python -m jobsearch.finder 6       2>&1 | tee -a run.log
     CSV="$(freshest_csv)"
-    python pipeline.py "$CSV" review_fresh 2>&1 | tee -a run.log
+    python -m jobsearch.pipeline "$CSV" review_fresh 2>&1 | tee -a run.log
     OUT="review_fresh"
     ;;
   4|week|week-fresh)
     echo "=== $(ts) РЕЖИМ 4: за неделю, свежие первыми (мало откликов) ===" | tee -a run.log
-    python job_finder.py         2>&1 | tee -a run.log
+    python -m jobsearch.finder         2>&1 | tee -a run.log
     CSV="$(freshest_csv)"
-    python pipeline.py "$CSV" review_week 2>&1 | tee -a run.log
+    python -m jobsearch.pipeline "$CSV" review_week 2>&1 | tee -a run.log
     OUT="review_week"
     ;;
   *)

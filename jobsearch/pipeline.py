@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pipeline.py — ATS-движок. По каждой вакансии из jobs_*.csv:
+jobsearch.pipeline — ATS-движок. По каждой вакансии из jobs_*.csv:
   - читает master_cv.md (источник правды),
   - через Claude API делает разбор вакансии, ATS-match, подгоняет summary и skills,
   - собирает подогнанное резюме (.docx) + сопроводительное + ATS-отчёт,
@@ -10,9 +10,9 @@ pipeline.py — ATS-движок. По каждой вакансии из jobs_*
 тюнятся summary и порядок/формулировки skills, где это правда; остальное в ATS-отчёте.
 
 Запуск:
-  pip install requests python-docx
+  pip install -e .
   export ANTHROPIC_API_KEY="sk-ant-..."
-  python pipeline.py [jobs_YYYY-MM-DD.csv]
+  python -m jobsearch.pipeline [jobs_YYYY-MM-DD.csv] [out_dir]
 """
 
 import csv
@@ -477,11 +477,11 @@ def main():
     order = {"WORLDWIDE": 0, "EUROPE": 1, "UNKNOWN": 2, "US-ONLY": 3}
     jobs.sort(key=lambda j: order.get(j.get("region"), 9))
 
-    # Применяем к пулу ТЕКУЩИЕ фильтры из job_finder (роль + стоп-слова + сеньорность),
+    # Применяем к пулу ТЕКУЩИЕ фильтры из finder (роль + стоп-слова + сеньорность),
     # чтобы уже собранные нерелевантные вакансии не доедались впустую.
     _loose = os.environ.get("LOOSE_FILTER") == "1"
     try:
-        import job_finder as _jf
+        from jobsearch import finder as _jf
         def _passes(j):
             t, d = j.get("title", ""), j.get("description", "")
             return ((not _jf.blocked(t)) and _jf.remote_ok(t, d, None)

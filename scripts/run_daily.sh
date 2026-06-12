@@ -10,8 +10,8 @@ source "$DIR/secrets.sh"          # отсюда берётся ANTHROPIC_API_KE
 
 {
   echo "=== Запуск $(date '+%Y-%m-%d %H:%M:%S') ==="
-  python job_finder.py
-  python pipeline.py
+  python -m jobsearch.finder
+  python -m jobsearch.pipeline
   echo "=== Готово $(date '+%Y-%m-%d %H:%M:%S') ==="
   echo ""
 } >> "$DIR/run.log" 2>&1

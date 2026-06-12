@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobsearch"
+version = "0.1.0"
+description = "Remote/B2B job collection + AI résumé-tailoring pipeline (JobSpy/RemoteOK/WWR/Remotive/ATS + Claude)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "python-jobspy",
+    "feedparser",
+    "requests",
+    "python-docx",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+jobsearch-find = "jobsearch.finder:main"
+jobsearch-tailor = "jobsearch.pipeline:main"
+
+[tool.setuptools]
+packages = ["jobsearch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

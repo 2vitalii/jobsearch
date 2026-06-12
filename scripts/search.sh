@@ -7,7 +7,7 @@
 #   bash search.sh "integration engineer" "Germany" 24
 #   bash search.sh "sql support" "worldwide"
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR" || exit 1
 
 if [ -d venv ]; then
@@ -40,7 +40,7 @@ OUT="review_${SLUG}"
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') Поиск: '$TERM' в '$LOC' за ${HRS}ч -> ./$OUT ===" | tee -a run.log
 
 # Целевой сбор: только JobSpy по term×location, свободный фильтр (доверяем ключевому слову)
-python job_finder.py "$HRS" --term "$TERM" --location "$LOC" --loose 2>&1 | tee -a run.log
+python -m jobsearch.finder "$HRS" --term "$TERM" --location "$LOC" --loose 2>&1 | tee -a run.log
 
 CSV="$(ls -t jobs_*.csv 2>/dev/null | head -1)"
 if [ -z "$CSV" ]; then
@@ -49,7 +49,7 @@ if [ -z "$CSV" ]; then
 fi
 
 # Обработка в свободном режиме (не режем фильтром ролей), вывод в свою папку
-LOOSE_FILTER=1 python pipeline.py "$CSV" "$OUT" 2>&1 | tee -a run.log
+LOOSE_FILTER=1 python -m jobsearch.pipeline "$CSV" "$OUT" 2>&1 | tee -a run.log
 
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') Готово. Комплекты: ./$OUT ===" | tee -a run.log
 echo ""
