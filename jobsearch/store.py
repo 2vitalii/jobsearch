@@ -47,6 +47,8 @@ class UserState(Protocol):
     def is_processed(self, user_id: str, dedup_key: str) -> bool: ...
     def mark_processed(self, user_id: str, dedup_key: str) -> None: ...
     def save_application(self, user_id: str, job: Job, res: MatchResult, folder: str) -> None: ...
+    def delete_user_data(self, user_id: str) -> None: ...        # GDPR-удаление
+    def list_applications(self, user_id: str) -> list[dict]: ...  # для UI: отклики юзера
 
 
 # ---------------------------------------------------------------------------
@@ -116,3 +118,19 @@ class FlatFileUserState:
                 job.company, job.title, job.source, job.url, folder,
                 "GENERATED", "", "",
             ])
+
+    def delete_user_data(self, user_id: str) -> None:
+        """GDPR-удаление: стирает все пер-юзерные артефакты (processed + applications)
+        и сбрасывает кэш. Платформенный JobStore (.seen_jobs.txt) НЕ трогаем — он
+        общий каталог, а не данные пользователя."""
+        for path in (self.processed_path, self.applications_path):
+            if os.path.exists(path):
+                os.remove(path)
+        self._processed = set()
+
+    def list_applications(self, user_id: str) -> list[dict]:
+        """Отклики пользователя как список строк (для UI). Нет файла — нет откликов."""
+        if not os.path.exists(self.applications_path):
+            return []
+        with open(self.applications_path, newline="", encoding="utf-8-sig") as f:
+            return list(csv.DictReader(f))

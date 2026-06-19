@@ -29,7 +29,7 @@ class Job:
 
 
 # ---------------------------------------------------------------------------
-# Two independent axes of configuration (kept separate on purpose — see ТЗ §3)
+# Two independent axes of configuration (kept separate on purpose)
 # ---------------------------------------------------------------------------
 @dataclass
 class SearchParams:

@@ -61,6 +61,33 @@ def test_applications_csv_keeps_12_columns(tmp_path):
     assert len(rows) == 2  # header + one record
 
 
+def test_list_applications_roundtrip(tmp_path):
+    ap = tmp_path / "apps.csv"
+    st = FlatFileUserState(str(tmp_path / "processed.txt"), str(ap))
+    assert st.list_applications(LOCAL_USER) == []  # no file yet
+    st.save_application(LOCAL_USER, _job(), _res(), "review/072_Acme_Support")
+    rows = st.list_applications(LOCAL_USER)
+    assert len(rows) == 1
+    assert rows[0]["company"] == "Acme"
+    assert rows[0]["status"] == "GENERATED"
+
+
+def test_delete_user_data_clears_processed_and_applications(tmp_path):
+    pp = tmp_path / "processed.txt"
+    ap = tmp_path / "apps.csv"
+    st = FlatFileUserState(str(pp), str(ap))
+    st.mark_processed(LOCAL_USER, "https://x/job")
+    st.save_application(LOCAL_USER, _job(), _res(), "review/072_Acme_Support")
+    assert pp.exists() and ap.exists()
+
+    st.delete_user_data(LOCAL_USER)
+
+    assert not pp.exists()
+    assert not ap.exists()
+    assert st.is_processed(LOCAL_USER, "https://x/job") is False
+    assert st.list_applications(LOCAL_USER) == []
+
+
 def test_userstate_has_no_cross_user_bulk_read():
     # Security seam: UserState must not expose a user_id-less bulk read.
     forbidden = {"read_all", "all", "list_all", "dump", "export_all", "all_applications"}

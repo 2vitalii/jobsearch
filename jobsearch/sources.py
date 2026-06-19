@@ -4,7 +4,7 @@ We Work Remotely, Remotive, and ATS boards (Greenhouse/Lever/Ashby).
 ``scrape(params, config) -> list[Job]`` is **pure relative to state**: it never
 reads or writes the seen/processed logs. Cache invalidation ("did we scrape this
 query recently?", query_hash + TTL) is the orchestration layer's job (it consults
-JobStore) and MUST NOT be wired inside scrape() — see ТЗ §4.
+JobStore) and MUST NOT be wired inside scrape().
 
 Scraped descriptions are UNTRUSTED text; downstream they only ever go into the
 LLM user position and through safe_name() before touching a filesystem path.
