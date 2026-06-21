@@ -13,6 +13,7 @@ dependencies = [
     "feedparser",
     "requests",
     "python-docx",
+    "supabase",
 ]
 
 [project.optional-dependencies]
