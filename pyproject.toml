@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
-api = ["fastapi", "uvicorn[standard]"]
+api = ["fastapi", "uvicorn[standard]", "python-multipart", "pypdf"]
 
 [project.scripts]
 jobsearch-find = "jobsearch.finder:main"

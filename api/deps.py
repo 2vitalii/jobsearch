@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from jobsearch.models import PlatformConfig
 from jobsearch.scoring import AnthropicClient
 from jobsearch.supabase_store import (
     SupabaseJobStore,
@@ -44,3 +45,9 @@ def get_user_state() -> SupabaseUserState:
 def get_llm() -> AnthropicClient:
     """Real LLM client; reads ANTHROPIC_API_KEY from the environment itself."""
     return AnthropicClient()
+
+
+@lru_cache(maxsize=1)
+def get_config() -> PlatformConfig:
+    """Platform config (models, thresholds). Defaults for now."""
+    return PlatformConfig()
