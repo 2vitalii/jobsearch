@@ -27,7 +27,7 @@ if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SECRET_KEY")
 from fastapi.testclient import TestClient
 
 from api.main import app
-from api.deps import get_supabase
+from jobsearch.supabase_store import make_supabase_client
 
 
 @pytest.fixture(scope="module")
@@ -37,17 +37,22 @@ def tc():
 
 @pytest.fixture()
 def auth_user():
-    client = get_supabase()
+    # Dedicated clients, NOT the app's get_supabase() singleton: GoTrue mutates a
+    # client's auth state on sign_in/get_user, so the admin lifecycle (create /
+    # delete) must run on a client that nothing else downgrades. Signing in uses a
+    # throwaway client so it never pollutes the admin one.
+    admin = make_supabase_client()
     email = f"test_{uuid.uuid4().hex}@example.com"
     password = uuid.uuid4().hex
-    created = client.auth.admin.create_user(
+    created = admin.auth.admin.create_user(
         {"email": email, "password": password, "email_confirm": True}
     )
     uid = created.user.id
-    signed = client.auth.sign_in_with_password({"email": email, "password": password})
+    signer = make_supabase_client()
+    signed = signer.auth.sign_in_with_password({"email": email, "password": password})
     token = signed.session.access_token
     yield {"user_id": uid, "email": email, "token": token}
-    client.auth.admin.delete_user(uid)
+    admin.auth.admin.delete_user(uid)  # cascade removes the user's rows
 
 
 def test_health_is_open(tc):
