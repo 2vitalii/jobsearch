@@ -22,9 +22,15 @@ from fastapi import Header, HTTPException, status
 
 @dataclass
 class CurrentUser:
-    """The authenticated caller, as resolved from the bearer token."""
+    """The authenticated caller, as resolved from the bearer token.
+
+    ``token`` is the caller's verified access token (JWT). It is carried so the
+    per-user path can build a user-scoped Supabase client (RLS applies). It is a
+    short-lived bearer credential — never log it, never return it in a response.
+    """
     user_id: str
     email: str
+    token: str
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -77,4 +83,4 @@ def get_current_user(
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return CurrentUser(user_id=user["id"], email=user.get("email") or "")
+    return CurrentUser(user_id=user["id"], email=user.get("email") or "", token=token)

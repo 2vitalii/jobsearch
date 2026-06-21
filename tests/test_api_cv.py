@@ -22,9 +22,10 @@ pytest.importorskip("supabase")
 pytest.importorskip("fastapi")
 pytest.importorskip("docx")
 
-if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SECRET_KEY")):
+if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SECRET_KEY")
+        and os.environ.get("SUPABASE_ANON_KEY")):
     pytest.skip(
-        "needs SUPABASE_URL + SUPABASE_SECRET_KEY (live project)",
+        "needs SUPABASE_URL + SUPABASE_SECRET_KEY + SUPABASE_ANON_KEY (live project)",
         allow_module_level=True,
     )
 

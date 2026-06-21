@@ -48,6 +48,39 @@ def make_supabase_client():
     return create_client(url, key, options=options)
 
 
+def make_user_client(access_token: str):
+    """Build a USER-SCOPED ``supabase.Client`` for the per-user path (SG-02).
+
+    Created on the **anon** key (``SUPABASE_ANON_KEY``) with the caller's already
+    verified JWT attached to PostgREST via ``postgrest.auth(token)``. Requests
+    then carry ``apikey: <anon>`` + ``Authorization: Bearer <user jwt>`` and run as
+    the ``authenticated`` role, so RLS policies (auth.uid() = user_id) actually
+    fire — a real second layer on top of the app-level user_id filter.
+
+    Do NOT cache this: it is per-request, bound to one user's token. The token is
+    read from the request (already validated by get_current_user) and is never
+    logged. If the JWT fails to attach, queries fail closed (anon has no grants),
+    never leak.
+    """
+    url = os.environ.get("SUPABASE_URL", "")
+    anon = os.environ.get("SUPABASE_ANON_KEY", "")
+    if not url or not anon:
+        raise RuntimeError(
+            "Нужны SUPABASE_URL и SUPABASE_ANON_KEY в env для user-scoped пути. "
+            "SUPABASE_ANON_KEY — это публичный anon/publishable ключ, НЕ секретный."
+        )
+    if not access_token:
+        raise RuntimeError("make_user_client требует проверенный access_token пользователя.")
+    from supabase import ClientOptions, create_client  # lazy: dep stays optional
+    options = ClientOptions(persist_session=False, auto_refresh_token=False)
+    client = create_client(url, anon, options=options)
+    # Attach the user's JWT so PostgREST runs the request as `authenticated`.
+    # postgrest.auth(token) updates the builder headers used per request (sets
+    # Authorization: Bearer <token>); apikey stays the anon key.
+    client.postgrest.auth(access_token)
+    return client
+
+
 def _job_row(job: Job) -> dict:
     """Map a Job onto a ``jobs`` row. scraped_at/first_seen use DB defaults."""
     return {

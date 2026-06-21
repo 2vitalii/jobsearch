@@ -86,6 +86,12 @@ def _write_match(supabase, user_id: str, job: Job, res, ats_report: str, cv_docx
         "cover_letter": res.cover_letter,
         "ats_report": ats_report,
         "cv_docx_path": cv_docx_path,
+        # Denormalized job display fields (SG-02): the per-user matches path reads
+        # these instead of joining the RLS-closed jobs pool.
+        "job_title": job.title,
+        "job_company": job.company,
+        "job_url": job.url,
+        "job_region": job.region,
         "analysis": {
             "reason": res.reason,
             "jd_keywords": res.jd_keywords,

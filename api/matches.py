@@ -1,14 +1,18 @@
 """Matches endpoints: list a user's generated matches and view one with a
 short-lived signed URL to download the tailored CV.
 
-SECURITY — READ THIS: the backend uses the service_role key, which BYPASSES RLS.
-There is no per-user database policy doing the scoping for us here, so EVERY query
-in this module MUST filter by the current user's id. Selecting a match by id alone
-(without ``.eq("user_id", current)``) would leak another user's data. The detail
-route checks ownership by querying on (id AND user_id) and 404s otherwise.
+SECURITY (SG-02): match rows are read through a USER-SCOPED Supabase client (anon
+key + caller's JWT), so PostgREST runs as `authenticated` and the RLS policy
+(auth.uid() = user_id) filters rows in the database — a real second layer. The
+app-level ``.eq("user_id", …)`` is kept on top as defense-in-depth.
 
-All routes are behind ``get_current_user``. Access to matches / Storage is done in
-the API layer through the injected Supabase client.
+The shared ``jobs`` pool is NOT readable on this path (no grant + RLS-closed), so
+display fields (title/company/url/region) are read from the denormalized columns
+on ``matches`` (written in api/run.py), never via a join to jobs.
+
+Storage signing needs service_role (the bucket is backend-only), so the signed
+URL is produced with the service_role client — but only for ``cv_docx_path`` taken
+from a row already proven to belong to the caller (RLS-filtered).
 """
 
 from __future__ import annotations
@@ -17,14 +21,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from .auth import CurrentUser, get_current_user
-from .deps import get_supabase
+from .deps import get_supabase, get_user_client
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
 SIGNED_URL_TTL = 300  # seconds — short-lived download link for the private .docx
 
-# Job columns embedded via the matches.job_id FK (PostgREST resource embedding).
-_SELECT = "*, jobs(title, company, url, region)"
+# Denormalized job display fields live on matches (see migration 0007); the
+# user-scoped path never touches the shared jobs pool.
+_SELECT = "*"
 
 
 class MatchDetail(BaseModel):
@@ -39,11 +44,23 @@ class MatchDetail(BaseModel):
     signed_cv_url: str | None = None
 
 
-def _sign_cv(supabase, path: str | None) -> str | None:
-    """Short-lived signed URL for a private packages object, or None if no docx."""
+def _build_job(row: dict) -> dict:
+    """Display job object assembled from the denormalized columns on matches."""
+    return {
+        "title": row.get("job_title"),
+        "company": row.get("job_company"),
+        "url": row.get("job_url"),
+        "region": row.get("job_region"),
+    }
+
+
+def _sign_cv(signer, path: str | None) -> str | None:
+    """Short-lived signed URL for a private packages object, or None if no docx.
+    Uses the service_role client (storage is backend-only); the path comes from a
+    row already RLS-scoped to the caller."""
     if not path:
         return None
-    res = supabase.storage.from_("packages").create_signed_url(path, SIGNED_URL_TTL)
+    res = signer.storage.from_("packages").create_signed_url(path, SIGNED_URL_TTL)
     # supabase-py returns a dict; the key has varied across versions.
     return res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
 
@@ -51,28 +68,29 @@ def _sign_cv(supabase, path: str | None) -> str | None:
 @router.get("", response_model=list[dict])
 def list_matches(
     user: CurrentUser = Depends(get_current_user),
-    supabase=Depends(get_supabase),
+    user_client=Depends(get_user_client),
 ) -> list[dict]:
-    # MUST scope by user_id — service_role bypasses RLS.
+    # User-scoped: RLS enforces user_id; the .eq is defense-in-depth.
     res = (
-        supabase.table("matches")
+        user_client.table("matches")
         .select(_SELECT)
         .eq("user_id", user.user_id)
         .order("created_at", desc=True)
         .execute()
     )
-    return res.data or []
+    return [{**row, "job": _build_job(row)} for row in (res.data or [])]
 
 
 @router.get("/{match_id}", response_model=MatchDetail)
 def get_match(
     match_id: str,
     user: CurrentUser = Depends(get_current_user),
-    supabase=Depends(get_supabase),
+    user_client=Depends(get_user_client),
+    signer=Depends(get_supabase),
 ) -> MatchDetail:
-    # Ownership check: id AND user_id. Not found OR not theirs -> 404.
+    # User-scoped read: RLS + (id AND user_id). Not found OR not theirs -> 404.
     res = (
-        supabase.table("matches")
+        user_client.table("matches")
         .select(_SELECT)
         .eq("id", match_id)
         .eq("user_id", user.user_id)
@@ -90,6 +108,6 @@ def get_match(
         analysis=row.get("analysis"),
         cover_letter=row.get("cover_letter"),
         ats_report=row.get("ats_report"),
-        job=row.get("jobs"),
-        signed_cv_url=_sign_cv(supabase, row.get("cv_docx_path")),
+        job=_build_job(row),
+        signed_cv_url=_sign_cv(signer, row.get("cv_docx_path")),
     )

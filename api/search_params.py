@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from .auth import CurrentUser, get_current_user
-from .deps import get_supabase
+from .deps import get_user_client
 
 router = APIRouter(prefix="/search-params", tags=["search-params"])
 
@@ -31,7 +31,7 @@ class SearchParamsBody(BaseModel):
 def put_search_params(
     body: SearchParamsBody,
     user: CurrentUser = Depends(get_current_user),
-    supabase=Depends(get_supabase),
+    supabase=Depends(get_user_client),
 ) -> SearchParamsBody:
     row = {"user_id": user.user_id, **body.model_dump()}
     (
@@ -45,7 +45,7 @@ def put_search_params(
 @router.get("", response_model=SearchParamsBody)
 def get_search_params(
     user: CurrentUser = Depends(get_current_user),
-    supabase=Depends(get_supabase),
+    supabase=Depends(get_user_client),
 ) -> SearchParamsBody:
     res = (
         supabase.table("search_params")

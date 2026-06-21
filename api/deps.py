@@ -14,13 +14,18 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from fastapi import Depends
+
 from jobsearch.models import PlatformConfig
 from jobsearch.scoring import AnthropicClient
 from jobsearch.supabase_store import (
     SupabaseJobStore,
     SupabaseUserState,
     make_supabase_client,
+    make_user_client,
 )
+
+from .auth import CurrentUser, get_current_user
 
 
 @lru_cache(maxsize=1)
@@ -51,6 +56,14 @@ def get_llm() -> AnthropicClient:
 def get_config() -> PlatformConfig:
     """Platform config (models, thresholds). Defaults for now."""
     return PlatformConfig()
+
+
+def get_user_client(user: CurrentUser = Depends(get_current_user)):
+    """A per-request, user-scoped Supabase client (anon key + caller's JWT) so RLS
+    applies. NOT cached — bound to one user's token. Use for direct per-user CRUD
+    (cvs / search_params / matches reads); service_role stays for the jobs pool and
+    heavy background writes."""
+    return make_user_client(user.token)
 
 
 def get_scraper():

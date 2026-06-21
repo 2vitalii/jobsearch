@@ -18,7 +18,7 @@ from jobsearch.cv import make_short_profile, parse_cv
 from jobsearch.models import PlatformConfig
 
 from .auth import CurrentUser, get_current_user
-from .deps import get_config, get_llm, get_supabase
+from .deps import get_config, get_llm, get_user_client
 
 router = APIRouter(prefix="/cv", tags=["cv"])
 
@@ -80,7 +80,7 @@ def _upsert_cv(supabase, user_id: str, markdown: str, short_profile: str) -> Non
 def upload_cv(
     file: UploadFile = File(...),
     user: CurrentUser = Depends(get_current_user),
-    supabase=Depends(get_supabase),
+    supabase=Depends(get_user_client),
     llm=Depends(get_llm),
     config: PlatformConfig = Depends(get_config),
 ) -> CvOut:
@@ -107,7 +107,7 @@ def upload_cv(
 @router.get("", response_model=CvOut)
 def get_cv(
     user: CurrentUser = Depends(get_current_user),
-    supabase=Depends(get_supabase),
+    supabase=Depends(get_user_client),
 ) -> CvOut:
     res = (
         supabase.table("cvs")
@@ -126,7 +126,7 @@ def get_cv(
 def update_cv(
     body: CvPut,
     user: CurrentUser = Depends(get_current_user),
-    supabase=Depends(get_supabase),
+    supabase=Depends(get_user_client),
     llm=Depends(get_llm),
     config: PlatformConfig = Depends(get_config),
 ) -> CvOut:

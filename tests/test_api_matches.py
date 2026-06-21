@@ -19,9 +19,10 @@ import pytest
 pytest.importorskip("supabase")
 pytest.importorskip("fastapi")
 
-if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SECRET_KEY")):
+if not (os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SECRET_KEY")
+        and os.environ.get("SUPABASE_ANON_KEY")):
     pytest.skip(
-        "needs SUPABASE_URL + SUPABASE_SECRET_KEY (live project)",
+        "needs SUPABASE_URL + SUPABASE_SECRET_KEY + SUPABASE_ANON_KEY (live project)",
         allow_module_level=True,
     )
 
@@ -79,7 +80,9 @@ def seeded():
     match_id = admin.table("matches").upsert(
         {"user_id": uid, "job_id": job_id, "status": "GENERATED", "fit_score": 88,
          "b2b_eligible": "yes", "analysis": ANALYSIS, "cover_letter": "Dear team",
-         "ats_report": "# ATS report", "cv_docx_path": cv_path},
+         "ats_report": "# ATS report", "cv_docx_path": cv_path,
+         "job_title": "Technical Support Engineer", "job_company": "Acme",
+         "job_url": "https://x/1", "job_region": "WORLDWIDE"},
         on_conflict="user_id,job_id",
     ).execute().data[0]["id"]
 
@@ -102,13 +105,13 @@ def test_list_requires_token(tc):
     assert tc.get("/matches").status_code == 401
 
 
-def test_list_returns_user_match_with_embedded_job(tc, seeded):
+def test_list_returns_user_match_with_denormalized_job(tc, seeded):
     r = tc.get("/matches", headers=_auth(seeded["token"]))
     assert r.status_code == 200, r.text
     rows = r.json()
     ours = [m for m in rows if m["id"] == seeded["match_id"]]
     assert len(ours) == 1
-    job = ours[0]["jobs"]
+    job = ours[0]["job"]
     assert job["title"] == "Technical Support Engineer"
     assert job["company"] == "Acme"
 
