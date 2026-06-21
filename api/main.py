@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import CurrentUser, get_current_user
 from .cv import router as cv_router
+from .search_params import router as search_params_router
 
 app = FastAPI(title="jobsearch API", version="0.1.0")
 
@@ -31,6 +32,7 @@ app.add_middleware(
 
 
 app.include_router(cv_router)
+app.include_router(search_params_router)
 
 
 @app.get("/health")
