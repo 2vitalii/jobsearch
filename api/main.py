@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import CurrentUser, get_current_user
 from .cv import router as cv_router
+from .matches import router as matches_router
 from .run import router as run_router
 from .search_params import router as search_params_router
 
@@ -35,6 +36,7 @@ app.add_middleware(
 app.include_router(cv_router)
 app.include_router(search_params_router)
 app.include_router(run_router)
+app.include_router(matches_router)
 
 
 @app.get("/health")
