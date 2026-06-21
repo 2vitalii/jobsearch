@@ -38,8 +38,14 @@ def make_supabase_client():
             "Нужны SUPABASE_URL и SUPABASE_SECRET_KEY в env. "
             "Задай: export SUPABASE_URL=... ; export SUPABASE_SECRET_KEY=<service_role>"
         )
-    from supabase import create_client  # lazy: keeps the dep optional for flat-file mode
-    return create_client(url, key)
+    from supabase import ClientOptions, create_client  # lazy: dep stays optional for flat-file mode
+    # The backend holds this service_role client as a singleton: it has no reason
+    # to persist or auto-refresh GoTrue sessions on disk. Going sessionless removes
+    # a whole class of shared-client auth-state issues (defense-in-depth on top of
+    # the stateless token check). Admin calls go by apikey; sign_in_with_password
+    # still returns the session inline, so nothing breaks.
+    options = ClientOptions(persist_session=False, auto_refresh_token=False)
+    return create_client(url, key, options=options)
 
 
 def _job_row(job: Job) -> dict:
