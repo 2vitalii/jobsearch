@@ -1,40 +1,23 @@
 import type { z } from "zod";
 import { createClient } from "@/utils/supabase/client";
-import { MeSchema, type Me } from "@/lib/schemas";
+import { MeSchema, type Me, CvSchema, type Cv } from "@/lib/schemas";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
-/**
- * Thin fetch wrapper around the FastAPI backend. Pulls the current Supabase
- * access token from the browser session and sends it as a Bearer token, then
- * validates the JSON against a Zod schema so contract drift fails loudly (clear
- * error) instead of silently producing a blank screen.
- */
-export async function apiFetch<T>(
-  path: string,
-  schema: z.ZodType<T>,
-  init?: RequestInit,
-): Promise<T> {
+/** Current Supabase access token, or undefined if not signed in. */
+async function getAccessToken(): Promise<string | undefined> {
   const supabase = createClient();
   const {
     data: { session },
   } = await supabase.auth.getSession();
-  const token = session?.access_token;
+  return session?.access_token;
+}
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
+function authHeader(token: string | undefined): Record<string, string> {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
-  if (!res.ok) {
-    throw new Error(`Request to ${path} failed (${res.status})`);
-  }
-
-  const json: unknown = await res.json();
+function validate<T>(path: string, schema: z.ZodType<T>, json: unknown): T {
   const parsed = schema.safeParse(json);
   if (!parsed.success) {
     throw new Error(`Unexpected response from ${path}`);
@@ -42,7 +25,83 @@ export async function apiFetch<T>(
   return parsed.data;
 }
 
+/**
+ * Thin fetch wrapper for JSON endpoints. Attaches the Supabase access token as a
+ * Bearer token and validates the response against a Zod schema, so contract drift
+ * fails loudly instead of rendering a blank screen.
+ */
+export async function apiFetch<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  init?: RequestInit,
+): Promise<T> {
+  const token = await getAccessToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeader(token),
+      ...(init?.headers ?? {}),
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Request to ${path} failed (${res.status})`);
+  }
+  return validate(path, schema, (await res.json()) as unknown);
+}
+
 /** GET /me — proves the Supabase-login → token → backend chain. */
 export function getMe(): Promise<Me> {
   return apiFetch("/me", MeSchema);
+}
+
+/** GET /cv — returns null when the user has no CV yet (404 is not an error). */
+export async function getCv(): Promise<Cv | null> {
+  const token = await getAccessToken();
+  const res = await fetch(`${API_BASE}/cv`, {
+    headers: { ...authHeader(token) },
+  });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`Couldn't load your CV (${res.status})`);
+  }
+  return validate("/cv", CvSchema, (await res.json()) as unknown);
+}
+
+/** POST /cv/upload — multipart; backend parses the file into master_cv.md form. */
+export async function uploadCv(file: File): Promise<Cv> {
+  const token = await getAccessToken();
+  const form = new FormData();
+  form.append("file", file);
+
+  // No Content-Type header: the browser sets the multipart boundary itself.
+  const res = await fetch(`${API_BASE}/cv/upload`, {
+    method: "POST",
+    headers: { ...authHeader(token) },
+    body: form,
+  });
+
+  if (!res.ok) {
+    if (res.status === 413) {
+      throw new Error("That file is too large — the limit is 5 MB.");
+    }
+    if (res.status === 400) {
+      throw new Error(
+        "Couldn't read that file. Upload a PDF or DOCX with selectable text.",
+      );
+    }
+    throw new Error(`Upload failed (${res.status}).`);
+  }
+  return validate("/cv/upload", CvSchema, (await res.json()) as unknown);
+}
+
+/** PUT /cv — save edited markdown; backend regenerates the short profile. */
+export function putCv(markdown: string): Promise<Cv> {
+  return apiFetch("/cv", CvSchema, {
+    method: "PUT",
+    body: JSON.stringify({ markdown }),
+  });
 }

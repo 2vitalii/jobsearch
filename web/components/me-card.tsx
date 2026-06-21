@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { LogOut } from "lucide-react";
+import { FileText, LogOut } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { getMe } from "@/lib/api";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -63,7 +64,11 @@ export function MeCard() {
           </p>
         )}
       </CardContent>
-      <CardFooter>
+      <CardFooter className="gap-2">
+        <Link href="/cv" className={buttonVariants({ variant: "default" })}>
+          <FileText />
+          Your CV
+        </Link>
         <Button variant="outline" onClick={logout}>
           <LogOut />
           Log out

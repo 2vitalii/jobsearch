@@ -12,3 +12,10 @@ export const MeSchema = z.object({
   email: z.string(),
 });
 export type Me = z.infer<typeof MeSchema>;
+
+// /cv (GET/PUT) and /cv/upload (POST)  ->  api/cv.py CvOut
+export const CvSchema = z.object({
+  markdown: z.string(),
+  short_profile: z.string(),
+});
+export type Cv = z.infer<typeof CvSchema>;
