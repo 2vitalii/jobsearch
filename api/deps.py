@@ -51,3 +51,10 @@ def get_llm() -> AnthropicClient:
 def get_config() -> PlatformConfig:
     """Platform config (models, thresholds). Defaults for now."""
     return PlatformConfig()
+
+
+def get_scraper():
+    """The scrape callable ``scrape(params, config) -> list[Job]``. Returned as a
+    dependency (not called) so tests can override it with a fake — no network."""
+    from jobsearch.sources import scrape
+    return scrape
