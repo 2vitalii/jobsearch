@@ -20,8 +20,11 @@ applications.csv
 .processed_urls.txt
 
 # --- Claude Mind memory ---
-.claude/mind.mv2
-.claude/mind.mv2.lock
+.claude/*.mv2
+.claude/*.mv2.lock
+
+# --- security audit reports (local-only, keep out of git) ---
+docs/security-audit-*.md
 
 # --- OS ---
 .DS_Store
