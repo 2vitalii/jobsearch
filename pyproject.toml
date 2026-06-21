@@ -18,13 +18,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+api = ["fastapi", "uvicorn[standard]"]
 
 [project.scripts]
 jobsearch-find = "jobsearch.finder:main"
 jobsearch-tailor = "jobsearch.pipeline:main"
 
 [tool.setuptools]
-packages = ["jobsearch"]
+packages = ["jobsearch", "api"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
