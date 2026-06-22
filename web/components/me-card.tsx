@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { FileText, LogOut } from "lucide-react";
+import { FileText, LogOut, Search } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
 import { getMe } from "@/lib/api";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -64,10 +64,14 @@ export function MeCard() {
           </p>
         )}
       </CardContent>
-      <CardFooter className="gap-2">
+      <CardFooter className="gap-2 flex-wrap">
         <Link href="/cv" className={buttonVariants({ variant: "default" })}>
           <FileText />
           Your CV
+        </Link>
+        <Link href="/search" className={buttonVariants({ variant: "outline" })}>
+          <Search />
+          Search
         </Link>
         <Button variant="outline" onClick={logout}>
           <LogOut />

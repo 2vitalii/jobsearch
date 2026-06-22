@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Search } from "lucide-react";
 import { getCv, uploadCv, putCv } from "@/lib/api";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -62,6 +62,13 @@ export default function CvPage() {
           Back
         </Link>
         <h1 className="text-lg font-semibold">Your CV</h1>
+        <Link
+          href="/search"
+          className={buttonVariants({ variant: "outline", size: "sm" })}
+        >
+          <Search />
+          Search
+        </Link>
       </div>
 
       {isLoading ? (

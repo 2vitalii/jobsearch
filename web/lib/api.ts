@@ -1,6 +1,17 @@
 import type { z } from "zod";
 import { createClient } from "@/utils/supabase/client";
-import { MeSchema, type Me, CvSchema, type Cv } from "@/lib/schemas";
+import {
+  MeSchema,
+  type Me,
+  CvSchema,
+  type Cv,
+  SearchParamsSchema,
+  type SearchParams,
+  RunAcceptedSchema,
+  type RunAccepted,
+  RunStatusSchema,
+  type RunStatus,
+} from "@/lib/schemas";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
@@ -104,4 +115,94 @@ export function putCv(markdown: string): Promise<Cv> {
     method: "PUT",
     body: JSON.stringify({ markdown }),
   });
+}
+
+/**
+ * GET /search-params — returns null when no search params saved yet (404 is not an error).
+ */
+export async function getSearchParams(): Promise<SearchParams | null> {
+  const token = await getAccessToken();
+  const res = await fetch(`${API_BASE}/search-params`, {
+    headers: { ...authHeader(token) },
+  });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`Couldn't load search params (${res.status})`);
+  }
+  return validate(
+    "/search-params",
+    SearchParamsSchema,
+    (await res.json()) as unknown,
+  );
+}
+
+/** PUT /search-params — save search params. */
+export function putSearchParams(body: SearchParams): Promise<SearchParams> {
+  return apiFetch("/search-params", SearchParamsSchema, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Error thrown when a run is already active (HTTP 409).
+ * Callers can detect this via `err instanceof RunConflictError`.
+ */
+export class RunConflictError extends Error {
+  readonly code = "RUN_ACTIVE" as const;
+  constructor() {
+    super("A run is already in progress");
+    this.name = "RunConflictError";
+  }
+}
+
+/**
+ * POST /run — starts a new pipeline run.
+ * Throws RunConflictError on 409 (run already active).
+ * Returns RunAccepted (run_id) on 202.
+ */
+export async function startRun(): Promise<RunAccepted> {
+  const token = await getAccessToken();
+  const res = await fetch(`${API_BASE}/run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeader(token),
+    },
+  });
+  if (res.status === 409) {
+    throw new RunConflictError();
+  }
+  if (!res.ok) {
+    throw new Error(`Failed to start run (${res.status})`);
+  }
+  return validate("/run", RunAcceptedSchema, (await res.json()) as unknown);
+}
+
+/** GET /run/{run_id} — poll a specific run's status. */
+export function getRun(runId: string): Promise<RunStatus> {
+  return apiFetch(`/run/${runId}`, RunStatusSchema);
+}
+
+/**
+ * GET /run/latest — returns null when no runs exist yet (404 is not an error).
+ */
+export async function getLatestRun(): Promise<RunStatus | null> {
+  const token = await getAccessToken();
+  const res = await fetch(`${API_BASE}/run/latest`, {
+    headers: { ...authHeader(token) },
+  });
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`Couldn't load latest run (${res.status})`);
+  }
+  return validate(
+    "/run/latest",
+    RunStatusSchema,
+    (await res.json()) as unknown,
+  );
 }
