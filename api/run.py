@@ -83,6 +83,7 @@ class RunStatus(BaseModel):
     skipped_low_fit: int
     summary: dict | None = None
     error: str | None = None
+    search_snapshot: dict | None = None
 
 
 class RunSummary(BaseModel):
@@ -124,11 +125,12 @@ def _upload_docx(supabase, user_id: str, job: Job, score: int, data: bytes) -> s
     return path
 
 
-def _write_match(supabase, user_id: str, job: Job, res, ats_report: str, cv_docx_path: str) -> None:
+def _write_match(supabase, user_id: str, job: Job, res, ats_report: str, cv_docx_path: str, run_id: str | None = None) -> None:
     job_id = _resolve_job_id(supabase, job)
     row = {
         "user_id": user_id,
         "job_id": job_id,
+        "run_id": run_id,
         "status": "GENERATED",
         "fit_score": res.fit_score,
         "b2b_eligible": res.b2b,
@@ -291,7 +293,7 @@ def _run_background(
 
             pkg = render.build_package(job, res, cv_markdown)
             cv_docx_path = _upload_docx(supabase, user_id, job, res.fit_score, pkg.cv_docx)
-            _write_match(supabase, user_id, job, res, pkg.ats_report, cv_docx_path)
+            _write_match(supabase, user_id, job, res, pkg.ats_report, cv_docx_path, run_id=run_id)
             user_state.mark_processed(user_id, job.dedup_key)
             generated += 1
             _update_run(supabase, run_id, generated=generated)
@@ -396,12 +398,22 @@ def run(
             detail="A run is already in progress. Poll GET /run/latest for status.",
         )
 
+    # Build the search snapshot from the loaded params (6 fields only; no PII).
+    search_snapshot = {
+        "keywords": params.keywords,
+        "locations": params.locations,
+        "period_hours": params.period_hours,
+        "work_format": params.work_format,
+        "loose": params.loose,
+        "targeted": params.targeted,
+    }
+
     # Insert the initial 'running' row so the client can start polling.
     # Catch a unique-violation from the partial index (concurrent POST race).
     try:
         ins = (
             supabase.table("runs")
-            .insert({"user_id": uid, "status": "running"})
+            .insert({"user_id": uid, "status": "running", "search_snapshot": search_snapshot})
             .execute()
         )
     except Exception as exc:
@@ -493,4 +505,5 @@ def _row_to_status(row: dict) -> RunStatus:
         skipped_low_fit=row.get("skipped_low_fit") or 0,
         summary=row.get("summary"),
         error=row.get("error"),
+        search_snapshot=row.get("search_snapshot"),
     )

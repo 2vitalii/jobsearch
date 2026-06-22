@@ -34,6 +34,7 @@ _SELECT = "*"
 
 class MatchDetail(BaseModel):
     id: str
+    run_id: str | None = None
     status: str | None = None
     fit_score: int | None = None
     b2b_eligible: str | None = None
@@ -102,6 +103,7 @@ def get_match(
     row = res.data[0]
     return MatchDetail(
         id=row["id"],
+        run_id=row.get("run_id"),
         status=row.get("status"),
         fit_score=row.get("fit_score"),
         b2b_eligible=row.get("b2b_eligible"),

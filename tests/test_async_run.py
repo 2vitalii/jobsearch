@@ -274,7 +274,7 @@ def _fake_upload_docx(supabase, user_id, job, score, data) -> str:
     return f"fake/{user_id}/{score}_{job.dedup_key}.docx"
 
 
-def _fake_write_match(supabase, user_id, job, res, ats_report, cv_docx_path) -> None:
+def _fake_write_match(supabase, user_id, job, res, ats_report, cv_docx_path, run_id=None) -> None:
     pass
 
 
@@ -835,3 +835,206 @@ class TestContractShape:
         body = r.json()
         if body["status"] == "done":
             assert body["summary"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Tests: attribution seam — run_id + search_snapshot (SG-04)
+# ---------------------------------------------------------------------------
+
+class TestAttributionSeam:
+    """Verify the run_id / search_snapshot attribution wiring added in 0009."""
+
+    FAKE_PARAMS = SearchParams(
+        keywords=["support", "python"],
+        locations=["Worldwide", "EU"],
+        period_hours=48,
+        work_format="remote",
+        loose=True,
+        targeted=False,
+    )
+    EXPECTED_SNAPSHOT = {
+        "keywords": ["support", "python"],
+        "locations": ["Worldwide", "EU"],
+        "period_hours": 48,
+        "work_format": "remote",
+        "loose": True,
+        "targeted": False,
+    }
+
+    def test_post_run_writes_search_snapshot_to_run_row(self, runs_db, monkeypatch):
+        """POST /run must store the search_snapshot in the runs row."""
+        import api.run as run_mod
+
+        _make_app_overrides(runs_db, FAKE_USER_ID, [], monkeypatch)
+
+        # Override _load_search_params with known params.
+        monkeypatch.setattr(
+            run_mod,
+            "_load_search_params",
+            lambda sb, uid: self.FAKE_PARAMS,
+        )
+        # Prevent the background task from running (no jobs to process).
+        monkeypatch.setattr(run_mod, "_run_background", lambda **kw: None)
+
+        with TestClient(app) as tc:
+            r = tc.post("/run")
+
+        assert r.status_code == 202, r.text
+        run_id = r.json()["run_id"]
+        row = runs_db.get(run_id)
+        assert row is not None
+        assert row.get("search_snapshot") == self.EXPECTED_SNAPSHOT
+
+        app.dependency_overrides.clear()
+
+    def test_get_run_status_exposes_search_snapshot(self, runs_db, monkeypatch):
+        """GET /run/{id} must include search_snapshot in the response."""
+        import api.run as run_mod
+
+        _make_app_overrides(runs_db, FAKE_USER_ID, [], monkeypatch)
+        monkeypatch.setattr(
+            run_mod,
+            "_load_search_params",
+            lambda sb, uid: self.FAKE_PARAMS,
+        )
+        monkeypatch.setattr(run_mod, "_run_background", lambda **kw: None)
+
+        with TestClient(app) as tc:
+            r_post = tc.post("/run")
+            assert r_post.status_code == 202
+            run_id = r_post.json()["run_id"]
+
+            r_get = tc.get(f"/run/{run_id}")
+            assert r_get.status_code == 200, r_get.text
+            body = r_get.json()
+
+        assert "search_snapshot" in body
+        assert body["search_snapshot"] == self.EXPECTED_SNAPSHOT
+
+        app.dependency_overrides.clear()
+
+    def test_get_run_latest_exposes_search_snapshot(self, runs_db, monkeypatch):
+        """GET /run/latest must include search_snapshot in the response."""
+        import api.run as run_mod
+
+        _make_app_overrides(runs_db, FAKE_USER_ID, [], monkeypatch)
+        monkeypatch.setattr(
+            run_mod,
+            "_load_search_params",
+            lambda sb, uid: self.FAKE_PARAMS,
+        )
+        monkeypatch.setattr(run_mod, "_run_background", lambda **kw: None)
+
+        with TestClient(app) as tc:
+            r_post = tc.post("/run")
+            assert r_post.status_code == 202
+
+            r_latest = tc.get("/run/latest")
+            assert r_latest.status_code == 200, r_latest.text
+            body = r_latest.json()
+
+        assert "search_snapshot" in body
+        assert body["search_snapshot"] == self.EXPECTED_SNAPSHOT
+
+        app.dependency_overrides.clear()
+
+    def test_get_run_snapshot_none_for_legacy_row(self, runs_db, monkeypatch):
+        """A run row without search_snapshot (legacy/pre-migration) must still
+        serialize cleanly — search_snapshot must be None, not raise."""
+        _make_app_overrides(runs_db, FAKE_USER_ID, [], monkeypatch)
+
+        # Insert a legacy row without search_snapshot (simulates pre-0009 row).
+        legacy_run = runs_db.insert({"user_id": FAKE_USER_ID, "status": "done"})
+        assert legacy_run.get("search_snapshot") is None
+
+        with TestClient(app) as tc:
+            r = tc.get(f"/run/{legacy_run['id']}")
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body.get("search_snapshot") is None
+
+        app.dependency_overrides.clear()
+
+    def test_write_match_receives_run_id_in_background_loop(self, monkeypatch):
+        """_run_background must pass run_id to _write_match for every match."""
+        import api.run as run_mod
+
+        db = FakeRunsDB()
+        run_id = db.insert({"user_id": FAKE_USER_ID, "status": "running"})["id"]
+        fake_sb = FakeSupabase(db)
+
+        captured_run_ids: list[str | None] = []
+
+        def _capturing_write_match(supabase, user_id, job, res, ats_report, cv_docx_path, run_id=None):
+            captured_run_ids.append(run_id)
+
+        monkeypatch.setattr(run_mod, "_upload_docx", _fake_upload_docx)
+        monkeypatch.setattr(run_mod, "_write_match", _capturing_write_match)
+        monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
+
+        _run_background(
+            run_id=run_id,
+            user_id=FAKE_USER_ID,
+            params=SearchParams(
+                keywords=["support"], locations=["WW"],
+                period_hours=168, work_format="remote", loose=False, targeted=False,
+            ),
+            cv_markdown=FAKE_CV_MD,
+            short_profile=FAKE_SHORT_PROFILE,
+            config=PlatformConfig(),
+            scraper=lambda p, c: _make_jobs(2),
+            job_store=FakeJobStore(),
+            user_state=FakeUserState(),
+            llm=FakeLLM(),
+        )
+
+        # Both generated matches must carry the correct run_id.
+        assert len(captured_run_ids) == 2, f"expected 2 calls, got: {captured_run_ids}"
+        for rid in captured_run_ids:
+            assert rid == run_id, f"expected run_id={run_id!r}, got {rid!r}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: MatchDetail model — nullable run_id (offline unit test)
+# ---------------------------------------------------------------------------
+
+class TestMatchDetailNullableRunId:
+    """Verify MatchDetail correctly handles rows with and without run_id."""
+
+    def test_match_detail_with_run_id_none(self):
+        """A match row missing run_id (legacy or pre-0009) must serialize cleanly."""
+        from api.matches import MatchDetail
+
+        row_without_run_id = {
+            "id": str(uuid.uuid4()),
+            # run_id absent — simulates a pre-0009 row
+            "status": "GENERATED",
+            "fit_score": 75,
+            "b2b_eligible": "no",
+            "analysis": {},
+            "cover_letter": "Dear team",
+            "ats_report": "# ATS",
+        }
+        detail = MatchDetail(
+            id=row_without_run_id["id"],
+            run_id=row_without_run_id.get("run_id"),  # None
+            status=row_without_run_id.get("status"),
+            fit_score=row_without_run_id.get("fit_score"),
+        )
+        assert detail.run_id is None
+        assert detail.id == row_without_run_id["id"]
+        assert detail.fit_score == 75
+
+    def test_match_detail_with_run_id_present(self):
+        """A match row with a run_id must expose it on the model."""
+        from api.matches import MatchDetail
+
+        fake_run_id = str(uuid.uuid4())
+        detail = MatchDetail(
+            id=str(uuid.uuid4()),
+            run_id=fake_run_id,
+            status="GENERATED",
+            fit_score=88,
+        )
+        assert detail.run_id == fake_run_id

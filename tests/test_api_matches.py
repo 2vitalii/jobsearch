@@ -127,6 +127,9 @@ def test_detail_returns_fields_and_signed_url(tc, seeded):
     assert body["job"]["company"] == "Acme"
     assert body["signed_cv_url"]  # non-empty signed download URL
     assert seeded["cv_path"] in body["signed_cv_url"]
+    # Attribution seam (0009): run_id is present in the response (may be None for
+    # rows seeded before the migration added the column, but the field must exist).
+    assert "run_id" in body
 
 
 def test_detail_404_for_other_id(tc, seeded):

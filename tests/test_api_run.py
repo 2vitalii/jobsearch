@@ -208,6 +208,16 @@ def test_run_full_loop(tc, auth_user, jobs):
         assert run_status["processed"] == 2
         assert run_status["generated"] >= 1
         assert run_status["generated"] + run_status["skipped_low_fit"] == run_status["processed"]
+        # Attribution seam (0009): search_snapshot must be present in the status response.
+        assert "search_snapshot" in run_status
+        assert run_status["search_snapshot"] is not None
+        snapshot = run_status["search_snapshot"]
+        assert "keywords" in snapshot
+        assert "locations" in snapshot
+        assert "period_hours" in snapshot
+        assert "work_format" in snapshot
+        assert "loose" in snapshot
+        assert "targeted" in snapshot
 
         uid = auth_user["user_id"]
         sb = make_supabase_client()
