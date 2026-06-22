@@ -173,23 +173,48 @@ def test_run_404_without_cv_or_search(tc, auth_user):
 
 
 def test_run_full_loop(tc, auth_user, jobs):
+    """POST /run → 202 {run_id}; poll until 'done'; assert counters + side effects.
+
+    Updated to the SG-03 async contract:
+      POST  /run            → 202  { run_id: "<uuid>" }
+      GET   /run/<run_id>   → 200  RunStatus (poll until status != 'running')
+    """
     _seed(auth_user)
     _override_scraper(jobs)
     try:
+        # Step 1: start the run.
         r = tc.post("/run", headers=_auth(auth_user))
-        assert r.status_code == 200, r.text
-        summary = r.json()
-        assert summary["scraped"] == 2
-        assert summary["queued"] == 2
-        assert summary["generated"] >= 1
-        assert summary["generated"] + summary["skipped_low_fit"] == summary["queued"]
+        assert r.status_code == 202, r.text
+        body = r.json()
+        assert "run_id" in body
+        run_id = body["run_id"]
+
+        # Step 2: poll until the background task finishes.
+        # TestClient runs background tasks synchronously, so a single GET
+        # after the POST is sufficient; add a small retry loop for resilience.
+        import time
+        run_status = None
+        for _ in range(20):
+            rs = tc.get(f"/run/{run_id}", headers=_auth(auth_user))
+            assert rs.status_code == 200, rs.text
+            run_status = rs.json()
+            if run_status["status"] != "running":
+                break
+            time.sleep(0.5)
+
+        assert run_status is not None
+        assert run_status["status"] == "done", f"run did not finish: {run_status}"
+        assert run_status["scraped"] == 2
+        assert run_status["processed"] == 2
+        assert run_status["generated"] >= 1
+        assert run_status["generated"] + run_status["skipped_low_fit"] == run_status["processed"]
 
         uid = auth_user["user_id"]
         sb = make_supabase_client()
 
         # matches: GENERATED rows with non-empty cv_docx_path
         m = sb.table("matches").select("status, cv_docx_path, fit_score").eq("user_id", uid).execute()
-        assert len(m.data) == summary["generated"]
+        assert len(m.data) == run_status["generated"]
         for row in m.data:
             assert row["status"] == "GENERATED"
             assert row["cv_docx_path"]
