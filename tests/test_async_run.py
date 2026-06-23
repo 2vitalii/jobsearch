@@ -1038,3 +1038,68 @@ class TestMatchDetailNullableRunId:
             fit_score=88,
         )
         assert detail.run_id == fake_run_id
+
+
+# ---------------------------------------------------------------------------
+# Tests: RunStatus.status Literal validation (type-tightening)
+# ---------------------------------------------------------------------------
+
+class TestRunStatusLiteralValidation:
+    """Verify that RunStatus.status is a Literal["running","done","failed"].
+
+    The DB CHECK constraint enforces the same set at the database layer; this
+    test ensures Pydantic catches any value that somehow bypasses the DB (e.g.
+    a future migration mistake or a stale row from a different schema version).
+    _row_to_status is the seam where a raw DB dict flows into the typed model,
+    so it is the natural place to test both valid and invalid inputs.
+    """
+
+    def _base_row(self, status: str) -> dict:
+        """Minimal runs-table row dict with the given status."""
+        return {
+            "status": status,
+            "scraped": 0,
+            "processed": 0,
+            "generated": 0,
+            "skipped_low_fit": 0,
+            "summary": None,
+            "error": None,
+            "search_snapshot": None,
+        }
+
+    def test_valid_status_running(self):
+        from api.run import _row_to_status
+        result = _row_to_status(self._base_row("running"))
+        assert result.status == "running"
+
+    def test_valid_status_done(self):
+        from api.run import _row_to_status
+        result = _row_to_status(self._base_row("done"))
+        assert result.status == "done"
+
+    def test_valid_status_failed(self):
+        from api.run import _row_to_status
+        result = _row_to_status(self._base_row("failed"))
+        assert result.status == "failed"
+
+    def test_invalid_status_raises_validation_error(self):
+        """A status value not in the Literal must raise a Pydantic ValidationError."""
+        from pydantic import ValidationError
+        from api.run import _row_to_status
+
+        with pytest.raises(ValidationError):
+            _row_to_status(self._base_row("queued"))
+
+    def test_invalid_status_pending_raises(self):
+        from pydantic import ValidationError
+        from api.run import _row_to_status
+
+        with pytest.raises(ValidationError):
+            _row_to_status(self._base_row("pending"))
+
+    def test_invalid_status_empty_string_raises(self):
+        from pydantic import ValidationError
+        from api.run import _row_to_status
+
+        with pytest.raises(ValidationError):
+            _row_to_status(self._base_row(""))

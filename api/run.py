@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -64,6 +64,11 @@ router = APIRouter(tags=["run"])
 REGION_ORDER = {"WORLDWIDE": 0, "EUROPE": 1, "UNKNOWN": 2, "US-ONLY": 3}
 DOCX_CT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
+# Shared literal type for the run status field.  Must stay in sync with:
+#   - runs table CHECK constraint: ('running','done','failed')  [migration 0008]
+#   - web Zod enum: z.enum(["running","done","failed"])
+RunStatusValue = Literal["running", "done", "failed"]
+
 
 # ---------------------------------------------------------------------------
 # Response models
@@ -76,7 +81,7 @@ class RunStarted(BaseModel):
 
 class RunStatus(BaseModel):
     """Returned by GET /run/{run_id} and GET /run/latest."""
-    status: str          # running | done | failed
+    status: RunStatusValue
     scraped: int
     processed: int       # was "queued" in the old synchronous RunSummary
     generated: int
