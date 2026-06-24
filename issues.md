@@ -18,6 +18,7 @@ last_verified_commit: fca6a73f166f70c00c620e7f3cc3e52c697468d9
 
 ## In progress
 <!-- - [~] description — owner/agent -->
+- [~] feat: FILTER_DEBUG observability — additive env-flag instrumentation in sources.py + api/run.py (branch feat/filter-debug-instrumentation)
 
 ## Closed (recent)
 <!-- - [x] description — commit hash -->

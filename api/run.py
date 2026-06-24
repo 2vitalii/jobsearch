@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -57,6 +58,12 @@ from .deps import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_debug() -> bool:
+    """Return True when FILTER_DEBUG env var is set to a truthy value."""
+    return os.getenv("FILTER_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
 
 router = APIRouter(tags=["run"])
 
@@ -271,6 +278,50 @@ def _run_background(
         fresh = [j for j in jobs if _fresh(j)]
         fresh.sort(key=lambda j: REGION_ORDER.get(j.region, 9))
         queue = sorted(fresh, key=lambda j: j.date_posted or "", reverse=True)[: config.max_jobs]
+
+        # -----------------------------------------------------------------
+        # FILTER_DEBUG 2nd-pass attribution (counting-only, no behavioral change).
+        # Re-walks `jobs` independently to attribute filter-gate drops.
+        # -----------------------------------------------------------------
+        if _filter_debug():
+            _dbg_dropped_blocked = 0
+            _dbg_dropped_not_remote = 0
+            _dbg_dropped_not_role = 0
+            _dbg_dropped_not_remote_flag_leak = 0
+            _dbg_passed_filters = 0
+            for _j in jobs:
+                # Mirror the exact short-circuit order of _passes (blocked -> remote_ok -> matches_role).
+                if filters.blocked(_j.title):
+                    _dbg_dropped_blocked += 1
+                elif not filters.remote_ok(_j.title, _j.description, None):
+                    _dbg_dropped_not_remote += 1
+                    # Flag-leak: would it pass with is_remote_flag=True?
+                    if filters.remote_ok(_j.title, _j.description, True):
+                        _dbg_dropped_not_remote_flag_leak += 1
+                elif not (params.loose or filters.matches_role(_j.title)):
+                    _dbg_dropped_not_role += 1
+                else:
+                    _dbg_passed_filters += 1
+            print(
+                f"[FILTER_DEBUG run 2nd-pass] "
+                f"jobs={len(jobs)} "
+                f"passed_filters={_dbg_passed_filters} "
+                f"dropped={{blocked:{_dbg_dropped_blocked}, "
+                f"not_remote:{_dbg_dropped_not_remote}, "
+                f"not_role:{_dbg_dropped_not_role}}} "
+                f"not_remote_flag_leak={_dbg_dropped_not_remote_flag_leak}"
+            )
+            print(
+                f"[FILTER_DEBUG run SUMMARY] "
+                f"scraped(after 1st filter)={len(jobs)} "
+                f"-> passed 2nd filter={_dbg_passed_filters} "
+                f"-> queue={len(queue)}; "
+                f"2nd-pass cut: "
+                f"blocked={_dbg_dropped_blocked} "
+                f"not_remote={_dbg_dropped_not_remote} "
+                f"(of which flag_leak={_dbg_dropped_not_remote_flag_leak}) "
+                f"not_role={_dbg_dropped_not_role}"
+            )
 
         _update_run(supabase, run_id, processed=len(queue))
 

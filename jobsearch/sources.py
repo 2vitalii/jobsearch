@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import os
 import sys
 
 try:
@@ -31,6 +32,15 @@ except ImportError:
 
 from . import filters
 from .models import Job, SearchParams, PlatformConfig
+
+
+# ---------------------------------------------------------------------------
+# Debug flag helper (purely additive — no effect when env var is absent/off)
+# ---------------------------------------------------------------------------
+def _filter_debug() -> bool:
+    """Return True when FILTER_DEBUG env var is set to a truthy value."""
+    return os.getenv("FILTER_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
 
 # ---------------------------------------------------------------------------
 # Scraper settings (not user request, not platform tuning — source plumbing)
@@ -101,6 +111,19 @@ def _mk_job(*, source, title, company, location, region, url, date_posted, descr
 def collect_jobspy(params: SearchParams) -> list:
     is_remote = params.work_format == "remote"
     jobs = []
+    debug = _filter_debug()
+
+    # Run-level grand totals (accumulated across all country/term combos).
+    if debug:
+        _total_raw: dict[str, int] = {}
+        _total_kept: int = 0
+        _total_dropped: dict[str, int] = {
+            "empty_title": 0, "blocked": 0, "not_role": 0, "not_remote": 0,
+        }
+        _total_samples: dict[str, list[str]] = {
+            "empty_title": [], "blocked": [], "not_role": [], "not_remote": [],
+        }
+
     for country in params.locations:
         is_region = country.strip().lower() not in VALID_JOBSPY_COUNTRIES
         if is_region:
@@ -131,13 +154,51 @@ def collect_jobspy(params: SearchParams) -> list:
             if df is None or df.empty:
                 continue
             cnt = 0
+
+            # Per-(country,term) debug counters — only allocated when FILTER_DEBUG is on.
+            if debug:
+                _raw_by_site: dict[str, int] = {}
+                _dropped: dict[str, int] = {
+                    "empty_title": 0, "blocked": 0, "not_role": 0, "not_remote": 0,
+                }
+                _samples: dict[str, list[str]] = {
+                    "empty_title": [], "blocked": [], "not_role": [], "not_remote": [],
+                }
+
             for _, row in df.iterrows():
                 title = filters.s(row.get("title"))
                 desc = filters.s(row.get("description"))
+
+                # --- FILTER_DEBUG: tally raw rows and compute first-tripped gate ---
+                # This block is counting-only; the real decision below is NOT changed.
+                if debug:
+                    site_raw = filters.s(row.get("site")).strip().lower() or "unknown"
+                    _raw_by_site[site_raw] = _raw_by_site.get(site_raw, 0) + 1
+                    _total_raw[site_raw] = _total_raw.get(site_raw, 0) + 1
+
+                # --- The real filter decision (MUST remain untouched) ---
                 if (not title or filters.blocked(title)
                         or (not params.loose and not filters.matches_role(title))
                         or not filters.remote_ok(title, desc, filters.parse_remote_flag(row.get("is_remote")))):
+                    # --- FILTER_DEBUG: attribute the reason for this drop ---
+                    if debug:
+                        if not title:
+                            gate = "empty_title"
+                        elif filters.blocked(title):
+                            gate = "blocked"
+                        elif not params.loose and not filters.matches_role(title):
+                            gate = "not_role"
+                        else:
+                            gate = "not_remote"
+                        _dropped[gate] += 1
+                        _total_dropped[gate] += 1
+                        # Collect up to 5 example titles per gate (first-seen, truncated).
+                        if gate != "empty_title" and len(_samples[gate]) < 5:
+                            _samples[gate].append(title[:80])
+                        if gate != "empty_title" and len(_total_samples[gate]) < 5:
+                            _total_samples[gate].append(title[:80])
                     continue
+
                 jobs.append(_mk_job(
                     source=filters.s(row.get("site")), title=title,
                     company=filters.s(row.get("company")),
@@ -147,8 +208,34 @@ def collect_jobspy(params: SearchParams) -> list:
                     date_posted=filters.s(row.get("date_posted")), description=desc,
                 ))
                 cnt += 1
+
             note = " (регион -> LinkedIn+Google, Indeed пропущен)" if is_region else ""
+            # Existing line — keep exactly as-is.
             print(f"  [{country}/'{term}'] подходящих: {cnt}{note}")
+
+            if debug:
+                _total_kept += cnt
+                print(
+                    f"  [FILTER_DEBUG {country}/'{term}'] "
+                    f"raw_by_site={_raw_by_site} "
+                    f"kept={cnt} "
+                    f"dropped={_dropped}"
+                )
+                for gate_name, examples in _samples.items():
+                    if examples:
+                        print(f"    sample {gate_name}: {examples}")
+
+    if debug:
+        print(
+            f"  [FILTER_DEBUG jobspy TOTAL] "
+            f"raw_by_site={_total_raw} "
+            f"kept={_total_kept} "
+            f"dropped={_total_dropped}"
+        )
+        for gate_name, examples in _total_samples.items():
+            if examples:
+                print(f"    sample {gate_name}: {examples}")
+
     return jobs
 
 
