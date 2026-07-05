@@ -172,7 +172,7 @@ def _write_match(supabase, user_id: str, job: Job, res, ats_report: str, cv_docx
 def _load_search_params(supabase, user_id: str) -> SearchParams:
     res = (
         supabase.table("search_params")
-        .select("keywords, locations, period_hours, work_format, loose, targeted")
+        .select("keywords, locations, period_hours, work_format, loose, targeted, exclude_senior")
         .eq("user_id", user_id).limit(1).execute()
     )
     if not res.data:
@@ -185,6 +185,7 @@ def _load_search_params(supabase, user_id: str) -> SearchParams:
         work_format=r.get("work_format") or "remote",
         loose=bool(r.get("loose")),
         targeted=bool(r.get("targeted")),
+        exclude_senior=bool(r.get("exclude_senior")),
     )
 
 
@@ -263,9 +264,9 @@ def _run_background(
         # -----------------------------------------------------------------
         def _passes(j: Job) -> bool:
             return (
-                (not filters.blocked(j.title))
+                (not filters.blocked(j.title, block_seniority=params.exclude_senior))
                 and filters.remote_ok(j.title, j.description, None)
-                and (params.loose or filters.matches_role(j.title))
+                and (params.loose or filters.matches_role(j.title, params.keywords))
             )
 
         def _fresh(j: Job) -> bool:
@@ -291,14 +292,14 @@ def _run_background(
             _dbg_passed_filters = 0
             for _j in jobs:
                 # Mirror the exact short-circuit order of _passes (blocked -> remote_ok -> matches_role).
-                if filters.blocked(_j.title):
+                if filters.blocked(_j.title, block_seniority=params.exclude_senior):
                     _dbg_dropped_blocked += 1
                 elif not filters.remote_ok(_j.title, _j.description, None):
                     _dbg_dropped_not_remote += 1
                     # Flag-leak: would it pass with is_remote_flag=True?
                     if filters.remote_ok(_j.title, _j.description, True):
                         _dbg_dropped_not_remote_flag_leak += 1
-                elif not (params.loose or filters.matches_role(_j.title)):
+                elif not (params.loose or filters.matches_role(_j.title, params.keywords)):
                     _dbg_dropped_not_role += 1
                 else:
                     _dbg_passed_filters += 1
@@ -427,6 +428,16 @@ def run(
     params = _load_search_params(supabase, uid)
     cv_markdown, short_profile = _load_cv(supabase, uid)
 
+    # Guard: at least one non-blank keyword is required.  An empty keywords list
+    # would pass matches_role([], []) → True (no-constraint semantic) and flood
+    # the queue with every scraped job.  Reject early so the product path never
+    # reaches that state (the prototype / pipeline.py uses default None, not []).
+    if not any(k.strip() for k in params.keywords):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Search needs at least one keyword",
+        )
+
     # One active run per user.
     #
     # Fast-path pre-check: return 409 in the common (non-concurrent) case so
@@ -462,6 +473,7 @@ def run(
         "work_format": params.work_format,
         "loose": params.loose,
         "targeted": params.targeted,
+        "exclude_senior": params.exclude_senior,
     }
 
     # Insert the initial 'running' row so the client can start polling.

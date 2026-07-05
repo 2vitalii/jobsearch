@@ -25,6 +25,7 @@ class SearchParamsBody(BaseModel):
     work_format: str = "remote"
     loose: bool = False
     targeted: bool = False
+    exclude_senior: bool = False  # opt-in: exclude senior/principal/director/head-of titles
 
 
 @router.put("", response_model=SearchParamsBody)
@@ -49,7 +50,7 @@ def get_search_params(
 ) -> SearchParamsBody:
     res = (
         supabase.table("search_params")
-        .select("keywords, locations, period_hours, work_format, loose, targeted")
+        .select("keywords, locations, period_hours, work_format, loose, targeted, exclude_senior")
         .eq("user_id", user.user_id)
         .limit(1)
         .execute()

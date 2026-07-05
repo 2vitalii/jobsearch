@@ -9,16 +9,18 @@ last_verified_commit: fca6a73f166f70c00c620e7f3cc3e52c697468d9
 
 ## Open
 <!-- known bugs / TODOs not yet done. Format: - [ ] short description (area) -->
-- [ ] Pre-existing ruff violations: unused `field` import in `jobsearch/models.py` (F401) and ambiguous variable `l` in `jobsearch/render.py` (E741). Not introduced by recent work. Reported for awareness.
+- [ ] Pre-existing ruff violations: ambiguous variable `l` in `jobsearch/render.py` (E741), and unused imports in `tests/test_filter_debug_instrumentation.py`. Not introduced by recent work. Reported for awareness. (`field` import in models.py fixed as part of feat/dynamic-role-filter.)
 - [ ] SG-03 migration 0008_runs_table.sql must be applied by hand in the Supabase SQL Editor (runs table + RLS + partial unique index). Code is merged but the table does not exist until applied.
 - [ ] Migration 0009_matches_add_run_snapshot.sql must be applied by hand in Supabase (matches.run_id FK + index, runs.search_snapshot). Apply AFTER 0008. Code merged (71eaf20) but columns don't exist until applied.
 - [x] Follow-up (Python, deferred): api/run.py RunStatus.status is `str` — tighten to `Literal["running","done","failed"]` to match the web Zod enum and catch drift statically. Done in branch refactor/runstatus-literal.
 - [ ] Cleanup (optional): web/CLAUDE.md and web/AGENTS.md are not prettier-clean on main (pre-existing). `prettier --check .` flags them; reformat in a separate `style:` commit if desired.
-- [ ] Unstaged: tests/test_web_search_schemas.py — a Python schema-drift guard (Zod vs Pydantic) the tester wrote during /search. Not committed (web task kept web-only). Land separately as `test:` if we want the guard.
+- [x] Unstaged: tests/test_web_search_schemas.py — landed and updated in feat/dynamic-role-filter (now includes exclude_senior field assertions).
 
 ## In progress
 <!-- - [~] description — owner/agent -->
 - [~] feat: FILTER_DEBUG observability — additive env-flag instrumentation in sources.py + api/run.py (branch feat/filter-debug-instrumentation)
+- [~] feat: dynamic role/seniority filter — matches_role/blocked parametrized, exclude_senior field, 0010 migration file. Branch feat/dynamic-role-filter. Awaiting PM gate before PR.
+  Known limitation: substring keyword match may miss synonyms (e.g. "support engineer" won't match "Customer Care Specialist"). Mitigated by score_fit/analyze as authoritative relevance gate + loose=True flag.
 
 ## Closed (recent)
 <!-- - [x] description — commit hash -->

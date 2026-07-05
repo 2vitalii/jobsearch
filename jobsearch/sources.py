@@ -176,17 +176,17 @@ def collect_jobspy(params: SearchParams) -> list:
                     _raw_by_site[site_raw] = _raw_by_site.get(site_raw, 0) + 1
                     _total_raw[site_raw] = _total_raw.get(site_raw, 0) + 1
 
-                # --- The real filter decision (MUST remain untouched) ---
-                if (not title or filters.blocked(title)
-                        or (not params.loose and not filters.matches_role(title))
+                # --- The real 1st-pass filter decision (role_keywords + block_seniority from the user's SearchParams) ---
+                if (not title or filters.blocked(title, block_seniority=params.exclude_senior)
+                        or (not params.loose and not filters.matches_role(title, params.keywords))
                         or not filters.remote_ok(title, desc, filters.parse_remote_flag(row.get("is_remote")))):
                     # --- FILTER_DEBUG: attribute the reason for this drop ---
                     if debug:
                         if not title:
                             gate = "empty_title"
-                        elif filters.blocked(title):
+                        elif filters.blocked(title, block_seniority=params.exclude_senior):
                             gate = "blocked"
-                        elif not params.loose and not filters.matches_role(title):
+                        elif not params.loose and not filters.matches_role(title, params.keywords):
                             gate = "not_role"
                         else:
                             gate = "not_remote"
@@ -239,7 +239,7 @@ def collect_jobspy(params: SearchParams) -> list:
     return jobs
 
 
-def fetch_remoteok(hours: int) -> list:
+def fetch_remoteok(hours: int, role_keywords: list[str] | None = None, block_seniority: bool = True) -> list:
     jobs = []
     try:
         r = requests.get(REMOTEOK_API, headers=HEADERS, timeout=TIMEOUT)
@@ -253,7 +253,9 @@ def fetch_remoteok(hours: int) -> list:
             continue
         title = html.unescape(item.get("position", ""))
         desc = filters.strip_html(item.get("description", ""))
-        if filters.blocked(title) or not filters.matches_role(title) or not filters.remote_ok(title, desc, True):
+        if (filters.blocked(title, block_seniority=block_seniority)
+                or not filters.matches_role(title, role_keywords)
+                or not filters.remote_ok(title, desc, True)):
             continue
         if not filters.within_hours(item.get("date", ""), hours):
             continue
@@ -267,7 +269,7 @@ def fetch_remoteok(hours: int) -> list:
     return jobs
 
 
-def fetch_wwr(hours: int) -> list:
+def fetch_wwr(hours: int, role_keywords: list[str] | None = None, block_seniority: bool = True) -> list:
     jobs = []
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
     for feed_url, trust in WWR_FEEDS:
@@ -280,9 +282,9 @@ def fetch_wwr(hours: int) -> list:
         for entry in feed.entries:
             title = html.unescape(entry.get("title", ""))
             summary = filters.strip_html(entry.get("summary", ""))
-            if filters.blocked(title):
+            if filters.blocked(title, block_seniority=block_seniority):
                 continue
-            if not trust and not filters.matches_role(title):   # категории шире support — фильтр по роли
+            if not trust and not filters.matches_role(title, role_keywords):   # категории шире support — фильтр по роли
                 continue
             if not filters.remote_ok(title, summary, True):
                 continue
@@ -304,7 +306,7 @@ def fetch_wwr(hours: int) -> list:
     return jobs
 
 
-def fetch_remotive(hours: int) -> list:
+def fetch_remotive(hours: int, role_keywords: list[str] | None = None, block_seniority: bool = True) -> list:
     jobs = []
     try:
         r = requests.get(REMOTIVE_API, headers=HEADERS, timeout=TIMEOUT)
@@ -316,7 +318,9 @@ def fetch_remotive(hours: int) -> list:
     for it in data:
         title = html.unescape(it.get("title", ""))
         desc = filters.strip_html(it.get("description", ""))
-        if filters.blocked(title) or not filters.matches_role(title) or not filters.remote_ok(title, desc, True):
+        if (filters.blocked(title, block_seniority=block_seniority)
+                or not filters.matches_role(title, role_keywords)
+                or not filters.remote_ok(title, desc, True)):
             continue
         if not filters.within_hours(it.get("publication_date", ""), hours):
             continue
@@ -336,7 +340,7 @@ def _ats_loc_onsite(loc: str) -> bool:
             and "remote" not in ll)
 
 
-def _ats_greenhouse(slug: str, hours: int) -> list:
+def _ats_greenhouse(slug: str, hours: int, role_keywords: list[str] | None = None, block_seniority: bool = True) -> list:
     out = []
     url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
     r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
@@ -345,7 +349,7 @@ def _ats_greenhouse(slug: str, hours: int) -> list:
         title = j.get("title", "")
         loc = (j.get("location") or {}).get("name", "")
         desc = filters.strip_html(j.get("content", ""))
-        if filters.blocked(title) or not filters.matches_role(title):
+        if filters.blocked(title, block_seniority=block_seniority) or not filters.matches_role(title, role_keywords):
             continue
         if not filters.within_hours(j.get("updated_at", ""), hours):
             continue
@@ -359,7 +363,7 @@ def _ats_greenhouse(slug: str, hours: int) -> list:
     return out
 
 
-def _ats_lever(slug: str, hours: int) -> list:
+def _ats_lever(slug: str, hours: int, role_keywords: list[str] | None = None, block_seniority: bool = True) -> list:
     out = []
     url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
     r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
@@ -370,7 +374,7 @@ def _ats_lever(slug: str, hours: int) -> list:
         cats = j.get("categories") or {}
         loc = cats.get("location", "") or ""
         desc = j.get("descriptionPlain", "") or filters.strip_html(j.get("description", ""))
-        if filters.blocked(title) or not filters.matches_role(title):
+        if filters.blocked(title, block_seniority=block_seniority) or not filters.matches_role(title, role_keywords):
             continue
         created = j.get("createdAt")
         if created:
@@ -389,7 +393,7 @@ def _ats_lever(slug: str, hours: int) -> list:
     return out
 
 
-def _ats_ashby(slug: str, hours: int) -> list:
+def _ats_ashby(slug: str, hours: int, role_keywords: list[str] | None = None, block_seniority: bool = True) -> list:
     out = []
     url = f"https://api.ashbyhq.com/posting-api/job-board/{slug}?includeCompensation=true"
     r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
@@ -400,7 +404,7 @@ def _ats_ashby(slug: str, hours: int) -> list:
         desc = j.get("descriptionPlain", "") or filters.strip_html(j.get("description", ""))
         flag = j.get("isRemote")
         flag = bool(flag) if flag is not None else None
-        if filters.blocked(title) or not filters.matches_role(title):
+        if filters.blocked(title, block_seniority=block_seniority) or not filters.matches_role(title, role_keywords):
             continue
         if not filters.within_hours(str(j.get("publishedAt", "") or j.get("publishedDate", "")), hours):
             continue
@@ -415,7 +419,7 @@ def _ats_ashby(slug: str, hours: int) -> list:
     return out
 
 
-def fetch_ats(hours: int) -> list:
+def fetch_ats(hours: int, role_keywords: list[str] | None = None, block_seniority: bool = True) -> list:
     handlers = {"greenhouse": _ats_greenhouse, "lever": _ats_lever, "ashby": _ats_ashby}
     jobs = []
     for platform, slug in ATS_COMPANIES:
@@ -424,7 +428,7 @@ def fetch_ats(hours: int) -> list:
             print(f"  [ATS] неизвестная платформа: {platform}")
             continue
         try:
-            got = h(slug, hours)
+            got = h(slug, hours, role_keywords=role_keywords, block_seniority=block_seniority)
             jobs += got
             print(f"  [{platform}/{slug}] подходящих: {len(got)}")
         except Exception as e:
@@ -438,11 +442,13 @@ def fetch_ats(hours: int) -> list:
 def scrape(params: SearchParams, config: PlatformConfig | None = None) -> list:
     """Collect jobs across all configured sources and dedup within the run.
     State-pure: does not consult seen/processed logs. Returns list[Job]."""
+    role_keywords = params.keywords
+    block_seniority = params.exclude_senior
     collected = collect_jobspy(params)
     if not params.targeted and USE_REMOTE_BOARDS:
-        collected += fetch_remoteok(params.period_hours)
-        collected += fetch_wwr(params.period_hours)
-        collected += fetch_remotive(params.period_hours)
+        collected += fetch_remoteok(params.period_hours, role_keywords=role_keywords, block_seniority=block_seniority)
+        collected += fetch_wwr(params.period_hours, role_keywords=role_keywords, block_seniority=block_seniority)
+        collected += fetch_remotive(params.period_hours, role_keywords=role_keywords, block_seniority=block_seniority)
     if not params.targeted and USE_ATS:
-        collected += fetch_ats(params.period_hours)
+        collected += fetch_ats(params.period_hours, role_keywords=role_keywords, block_seniority=block_seniority)
     return filters.dedupe(collected)
