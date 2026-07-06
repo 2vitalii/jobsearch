@@ -38,9 +38,13 @@ NEGATIVE_TITLE_KEYWORDS = [
     "research engineer", "verification engineer", "data engineer", "software engineer",
     "qa engineer", "quality assurance", "architect", "systems engineer", "test engineer",
     "devops engineer", "machine learning", "ml engineer", "sales engineer",
-    # сеньорность — не твой уровень с 2 годами опыта, режем чтобы не жечь слоты
-    "senior", "principal", "director", "head of", "staff ", "chief",
 ]
+
+# Seniority terms extracted from NEGATIVE_TITLE_KEYWORDS so they can be toggled
+# independently per user (see blocked(block_seniority=...) and SearchParams.exclude_senior).
+# When block_seniority=True (legacy default) these are checked in addition to
+# NEGATIVE_TITLE_KEYWORDS; when False they are skipped entirely.
+SENIORITY_KEYWORDS = ["senior", "principal", "director", "head of", "staff ", "chief"]
 
 EU_COUNTRY_NAMES = {
     "poland", "germany", "netherlands", "spain", "portugal", "ireland", "france",
@@ -94,14 +98,35 @@ REMOTE_SIGNALS = [
 # ---------------------------------------------------------------------------
 # Title / role filters
 # ---------------------------------------------------------------------------
-def matches_role(text: str) -> bool:
+def matches_role(text: str, role_keywords: list[str] | None = None) -> bool:
+    """Return True when text contains at least one role keyword.
+
+    role_keywords=None  → use the static ROLE_KEYWORDS list (legacy / prototype default).
+    role_keywords=[]    → return True unconditionally (no role constraint; the
+                          score_fit / analyze pass is the authoritative relevance gate).
+    role_keywords=[...] → substring-match against the caller-supplied list (same
+                          mechanism as the legacy path, but dynamic per user).
+    """
+    if role_keywords is not None and len(role_keywords) == 0:
+        return True
+    kws = ROLE_KEYWORDS if role_keywords is None else role_keywords
     t = (text or "").lower()
-    return any(kw in t for kw in ROLE_KEYWORDS)
+    return any(kw.lower() in t for kw in kws)
 
 
-def blocked(title: str) -> bool:
+def blocked(title: str, block_seniority: bool = True) -> bool:
+    """Return True when the title contains a negative or seniority keyword.
+
+    Always checks NEGATIVE_TITLE_KEYWORDS (off-role, off-function terms).
+    When block_seniority=True (the legacy default) also checks SENIORITY_KEYWORDS;
+    set False to pass senior / principal / director titles through.
+    """
     t = (title or "").lower()
-    return any(kw in t for kw in NEGATIVE_TITLE_KEYWORDS)
+    if any(kw in t for kw in NEGATIVE_TITLE_KEYWORDS):
+        return True
+    if block_seniority and any(kw in t for kw in SENIORITY_KEYWORDS):
+        return True
+    return False
 
 
 def classify_region(location, title, desc, hint_country=None) -> str:

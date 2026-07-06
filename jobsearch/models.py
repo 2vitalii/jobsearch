@@ -6,7 +6,7 @@ globals that the original CLI prototype passed around.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +41,7 @@ class SearchParams:
     work_format: str = "remote"
     loose: bool = False
     targeted: bool = False
+    exclude_senior: bool = False  # when True, SENIORITY_KEYWORDS are applied by filters.blocked()
 
 
 @dataclass

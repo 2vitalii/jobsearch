@@ -859,6 +859,7 @@ class TestAttributionSeam:
         "work_format": "remote",
         "loose": True,
         "targeted": False,
+        "exclude_senior": False,
     }
 
     def test_post_run_writes_search_snapshot_to_run_row(self, runs_db, monkeypatch):
