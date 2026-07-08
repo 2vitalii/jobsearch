@@ -143,6 +143,71 @@ Posted-within segmented, Work-format segmented, Processing-limit stepper). **Rig
 header, source rows list, progress bar, and the full-width Run-search CTA pinned at the bottom.
 (Exact grid columns/spacing to lock during 5c.)
 
+## Landing page — design system (marketing)
+
+> Approved landing screenshot (product wordmark **"Sift"**). Same graphite palette, accent, and
+> mono/label typography as Search & Run above — this block adds only the marketing-page **layout
+> patterns** and the few net-new component variants. Where the landing reuses an existing token
+> (`--background` #0C0E11, `--primary` #5F7296, IBM Plex Mono for numbers, the uppercase-tracked
+> label tier), reference it — do NOT mint new names. Hex noted only where genuinely new; eyeballed
+> values marked "verify in code". Docs only — do not implement the landing here.
+
+### Palette — reuses Search & Run tokens
+
+Maps entirely to existing tokens: `--background` (page + every section — section rhythm is
+spacing, not color bands), `--card` + `--border` (cards/panels), `--foreground` /
+`--muted-foreground` / label tier (text), `--primary` `#5F7296` (logo mark, "Start free", all
+primary CTAs, step numbers `01`–`04`, and the quote-block accent line). One value needs
+confirming, not a new token yet:
+
+- **Quote-block left accent line** reads as `--primary` (slate-blue) but slightly dimmer than the
+  solid Run/CTA fill — likely `--primary` at reduced opacity (~60–80%). Verify exact value in code;
+  only mint a named token if it proves distinct from `--primary`.
+
+### Typography — reuses Search & Run rules
+
+IBM Plex Mono for ALL numbers (hero demo metrics `≈1,080 / 200 / 200 / 6`; step numbers
+`01`–`04`); Inter for headings/body/labels. Uppercase-tracked label tier for every eyebrow
+("AI JOB SEARCH", "THE PROBLEM", "HOW IT WORKS", "WHY TEAMS TRUST IT", "LAST RUN · …",
+"THE MANUAL WAY", "WITH SIFT", the metric labels). Hero + section headings = Inter, bold, large.
+
+### New component variants (not present in Search & Run)
+
+- **Secondary button (outline)**: transparent fill + `--input`/`--border` outline +
+  `--foreground` label; pairs with the primary filled button. Used by "See how it works" /
+  "Talk to us". (Search & Run only had the primary filled Run button — this variant is new.)
+- **Top marketing nav**: left = logo mark (`--primary` rounded square) + "Sift" wordmark; right =
+  muted text links (Product / Pricing / Sign in) + primary "Start free" button.
+- **Quote / trust block** — NEW pattern: a thin vertical **left accent line** (`--primary`, see
+  palette note) + eyebrow + large heading + muted body. No card fill; the left line is the only ornament.
+
+### Landing layout patterns (top → bottom)
+
+1. **Hero** (centered): eyebrow ("AI JOB SEARCH") → large 2–3-line headline (Inter bold) → muted
+   subhead → two CTAs (primary filled "Create your master resume" + secondary outline "See how it
+   works") → demo metric panel.
+   - **Demo metric panel**: an eyebrow row ("LAST RUN · FRONTEND ENGINEER, REMOTE EU") then 4
+     metrics inline (VACANCIES SCANNED / PROCESSED / TAILORED / SOURCES), each = uppercase muted
+     label on top + IBM Plex Mono number below. **No hairline dividers between the metrics**
+     (label-separated only) — this differs from the Search & Run §3 metric card, which used vertical
+     `--border` hairlines. The panel sits inside one subtle `--border` frame.
+2. **Problem / Solution** — two columns: eyebrow "THE PROBLEM" + centered heading, then two
+   `--card`+`--border` rounded cards side by side — "THE MANUAL WAY" vs "WITH SIFT" — each an
+   uppercase label + a few short muted lines.
+3. **How it works** — eyebrow "HOW IT WORKS" + heading, then **4 numbered steps in a row**: `01`–`04`
+   (mono, `--primary`) + bold title (Inter) + muted description. Steps separated by spacing / thin `--border`.
+4. **Trust / quote block** — the new left-accent-line pattern: "WHY TEAMS TRUST IT" → "Sift never
+   invents experience you don't have." → muted body. (Mirrors the resume-honesty invariant — never
+   invent experience the candidate lacks.)
+5. **Differentiators list** — stacked rows, each = bold title (left) + muted description (right),
+   rows separated by `--border` hairlines: Full-market coverage / Transparent scoring / Cost control /
+   Application tracker. (Note: "Cost control" is the processing-limit differentiator tracked in issues.md.)
+6. **Final CTA block** (centered): heading → muted subtext → two CTAs (primary "Create your account" +
+   secondary outline "Talk to us") → muted microcopy under ("No card required to preview matches.").
+7. **Footer**: "Sift" wordmark left, muted "© 2026 · Privacy · Terms" right.
+
+(Exact spacing / max-width / grid to lock during landing implementation — not this task.)
+
 ## Data fetching — non-negotiable
 
 - Every backend call goes through `web/lib/api.ts` (`apiFetch`/typed helpers): it attaches
