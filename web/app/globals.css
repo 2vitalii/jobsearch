@@ -42,6 +42,9 @@
   --color-form-label: var(--form-label);
   --color-segment-active: var(--segment-active);
   --color-primary-hover: var(--primary-hover);
+  --color-verdict-shortlist: var(--verdict-shortlist);
+  --color-verdict-maybe: var(--verdict-maybe);
+  --color-verdict-reject: var(--verdict-reject);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -89,6 +92,10 @@
   --status-running: #c7994c;
   --status-done: #4e9a6b;
   --status-error: #c0564e;
+  /* Recruiter-verdict semantic tokens — separate names from status-* to keep semantics clean */
+  --verdict-shortlist: #4e9a6b;
+  --verdict-maybe: #c7994c;
+  --verdict-reject: #c0564e;
   /* Form-group label (lighter than foreground, brighter than muted) */
   --form-label: oklch(0.3 0 0);
   /* Segmented-control active fill */
@@ -136,6 +143,10 @@
   --status-running: #c7994c;
   --status-done: #4e9a6b;
   --status-error: #c0564e;
+  /* Recruiter-verdict semantic tokens — separate names from status-* to keep semantics clean */
+  --verdict-shortlist: #4e9a6b;
+  --verdict-maybe: #c7994c;
+  --verdict-reject: #c0564e;
   /* Form-group label color (brighter than muted, below --foreground) */
   --form-label: #d3d7dd;
   /* Segmented-control active fill (elevated neutral gray, no accent tint) */

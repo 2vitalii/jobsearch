@@ -1,4 +1,4 @@
-import type { z } from "zod";
+import { z } from "zod";
 import { createClient } from "@/utils/supabase/client";
 import {
   MeSchema,
@@ -11,6 +11,10 @@ import {
   type RunAccepted,
   RunStatusSchema,
   type RunStatus,
+  MatchListItemSchema,
+  type MatchListItem,
+  MatchDetailSchema,
+  type MatchDetail,
 } from "@/lib/schemas";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
@@ -184,6 +188,16 @@ export async function startRun(): Promise<RunAccepted> {
 /** GET /run/{run_id} — poll a specific run's status. */
 export function getRun(runId: string): Promise<RunStatus> {
   return apiFetch(`/run/${runId}`, RunStatusSchema);
+}
+
+/** GET /matches — all matches for the current user, created_at DESC. */
+export function getMatches(): Promise<MatchListItem[]> {
+  return apiFetch("/matches", z.array(MatchListItemSchema));
+}
+
+/** GET /matches/{id} — single match with signed_cv_url. */
+export function getMatch(id: string): Promise<MatchDetail> {
+  return apiFetch(`/matches/${id}`, MatchDetailSchema);
 }
 
 /**
