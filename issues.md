@@ -10,6 +10,8 @@ last_verified_commit: fca6a73f166f70c00c620e7f3cc3e52c697468d9
 ## Open
 <!-- known bugs / TODOs not yet done. Format: - [ ] short description (area) -->
 - [ ] Pre-existing ruff violations: ambiguous variable `l` in `jobsearch/render.py` (E741), and unused imports in `tests/test_filter_debug_instrumentation.py`. Not introduced by recent work. Reported for awareness. (`field` import in models.py fixed as part of feat/dynamic-role-filter.)
+- [ ] Per-run results filtering on /results is a future extension. GET /matches currently returns all user matches (no ?run_id filter); RunStatus does not expose the run id. To scope results to a specific run, either: (a) add ?run_id query param to GET /matches + pass run_id in the /search→/results redirect, or (b) expose run_id in RunStatus and let the frontend filter client-side. Not a blocker for 5d (all-matches view works correctly). (backlog, web)
+- [ ] Pagination on /results is deferred — match sets are small (unique(user_id, job_id) dedup). Implement if sets grow beyond ~50. (backlog, web)
 - [ ] SG-03 migration 0008_runs_table.sql must be applied by hand in the Supabase SQL Editor (runs table + RLS + partial unique index). Code is merged but the table does not exist until applied.
 - [ ] Migration 0009_matches_add_run_snapshot.sql must be applied by hand in Supabase (matches.run_id FK + index, runs.search_snapshot). Apply AFTER 0008. Code merged (71eaf20) but columns don't exist until applied.
 

@@ -50,3 +50,67 @@ export const RunStatusSchema = z.object({
   search_snapshot: z.unknown().optional().nullable(),
 });
 export type RunStatus = z.infer<typeof RunStatusSchema>;
+
+// GET /matches — analysis sub-object inside each match
+export const MatchAnalysisSchema = z
+  .object({
+    reason: z.string().optional().nullable(),
+    jd_keywords: z.array(z.string()).optional().nullable().default([]),
+    ats_present: z.array(z.string()).optional().nullable().default([]),
+    ats_missing: z.array(z.string()).optional().nullable().default([]),
+    tailored_summary: z.string().optional().nullable(),
+    tailored_skills: z.array(z.string()).optional().nullable().default([]),
+    gaps: z.string().optional().nullable(),
+    recruiter_verdict: z.string().optional().nullable(),
+  })
+  .passthrough();
+export type MatchAnalysis = z.infer<typeof MatchAnalysisSchema>;
+
+// Job sub-object synthesised by the backend in both list and detail responses
+export const MatchJobSchema = z
+  .object({
+    title: z.string().nullable().optional(),
+    company: z.string().nullable().optional(),
+    url: z.string().nullable().optional(),
+    region: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type MatchJob = z.infer<typeof MatchJobSchema>;
+
+// GET /matches — list item
+export const MatchListItemSchema = z
+  .object({
+    id: z.string(),
+    fit_score: z.number().nullable().optional(),
+    b2b_eligible: z.string().nullable().optional(),
+    analysis: MatchAnalysisSchema.nullable().optional(),
+    cover_letter: z.string().nullable().optional(),
+    ats_report: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    run_id: z.string().nullable().optional(),
+    created_at: z.string(),
+    job_title: z.string().nullable().optional(),
+    job_company: z.string().nullable().optional(),
+    job_url: z.string().nullable().optional(),
+    job_region: z.string().nullable().optional(),
+    job: MatchJobSchema.nullable().optional(),
+  })
+  .passthrough();
+export type MatchListItem = z.infer<typeof MatchListItemSchema>;
+
+// GET /matches/{id} — detail (adds signed_cv_url)
+export const MatchDetailSchema = z
+  .object({
+    id: z.string(),
+    run_id: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    fit_score: z.number().nullable().optional(),
+    b2b_eligible: z.string().nullable().optional(),
+    analysis: MatchAnalysisSchema.nullable().optional(),
+    cover_letter: z.string().nullable().optional(),
+    ats_report: z.string().nullable().optional(),
+    job: MatchJobSchema.nullable().optional(),
+    signed_cv_url: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type MatchDetail = z.infer<typeof MatchDetailSchema>;
