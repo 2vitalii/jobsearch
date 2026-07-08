@@ -1,11 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowLeft, Loader2, Play, X } from "lucide-react";
+import { MapPin, X } from "lucide-react";
 import {
   getSearchParams,
   putSearchParams,
@@ -15,25 +14,24 @@ import {
   RunConflictError,
 } from "@/lib/api";
 import type { SearchParams, RunStatus } from "@/lib/schemas";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 // ---------- constants ----------
 
-const PERIOD_PRESETS: { label: string; value: number }[] = [
-  { label: "24 часа", value: 24 },
-  { label: "3 дня", value: 72 },
-  { label: "Неделя", value: 168 },
+// Period presets with string values so ToggleGroup (Value extends string) works cleanly.
+const PERIOD_PRESETS: { label: string; strVal: string; hours: number }[] = [
+  { label: "24h", strVal: "24", hours: 24 },
+  { label: "7 days", strVal: "168", hours: 168 },
+  { label: "30 days", strVal: "720", hours: 720 },
 ];
 
 const WORK_FORMAT_OPTIONS: { label: string; value: string }[] = [
   { label: "Remote", value: "remote" },
   { label: "Hybrid", value: "hybrid" },
-  { label: "Onsite", value: "onsite" },
+  { label: "On-site", value: "onsite" },
 ];
 
 const DEFAULT_SEARCH_PARAMS: SearchParams = {
@@ -43,20 +41,72 @@ const DEFAULT_SEARCH_PARAMS: SearchParams = {
   work_format: "remote",
   loose: false,
   targeted: false,
+  exclude_senior: false,
 };
 
 const POLL_INTERVAL_MS = 2500;
 
-// ---------- helper: chips input ----------
+/**
+ * Real search sources — mirrors jobsearch/sources.py (9 sources).
+ * Keep in sync with: linkedin, indeed, google, RemoteOK, WeWorkRemotely,
+ * Remotive, Greenhouse, Lever, Ashby.
+ */
+const SEARCH_SOURCES = [
+  "LinkedIn",
+  "Indeed",
+  "Google",
+  "RemoteOK",
+  "WeWorkRemotely",
+  "Remotive",
+  "Greenhouse",
+  "Lever",
+  "Ashby",
+] as const;
+
+// ---------- form state ----------
+
+interface FormState {
+  keywords: string[];
+  locations: string[];
+  periodHours: number;
+  /** String value from the custom hours input (may be empty while user types). */
+  customPeriod: string;
+  /** When true the custom-hours input is active; period preset segmented control is unselected. */
+  useCustomPeriod: boolean;
+  workFormat: string;
+  excludeSenior: boolean;
+}
+
+function makeFormState(p: SearchParams): FormState {
+  const preset = PERIOD_PRESETS.find((pr) => pr.hours === p.period_hours);
+  return {
+    keywords: p.keywords,
+    locations: p.locations,
+    periodHours: p.period_hours,
+    customPeriod: preset ? "" : String(p.period_hours),
+    useCustomPeriod: !preset,
+    workFormat: p.work_format,
+    excludeSenior: p.exclude_senior,
+  };
+}
+
+// ---------- chip input ----------
 
 interface ChipsInputProps {
   label: string;
   placeholder: string;
   chips: string[];
   onChange: (chips: string[]) => void;
+  leadingGlyph?: "hash" | "pin";
 }
 
-function ChipsInput({ label, placeholder, chips, onChange }: ChipsInputProps) {
+function ChipsInput({
+  label,
+  placeholder,
+  chips,
+  onChange,
+  leadingGlyph = "hash",
+}: ChipsInputProps) {
   const [inputValue, setInputValue] = useState("");
   const inputId = `chips-${label.toLowerCase().replace(/\s+/g, "-")}`;
 
@@ -77,9 +127,7 @@ function ChipsInput({ label, placeholder, chips, onChange }: ChipsInputProps) {
   }
 
   function handleBlur() {
-    if (inputValue.trim()) {
-      addChip(inputValue);
-    }
+    if (inputValue.trim()) addChip(inputValue);
   }
 
   function removeChip(chip: string) {
@@ -88,20 +136,41 @@ function ChipsInput({ label, placeholder, chips, onChange }: ChipsInputProps) {
 
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={inputId}>{label}</Label>
-      <div className="flex min-h-8 w-full flex-wrap items-center gap-1.5 rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+      <label
+        htmlFor={inputId}
+        className="block text-[15px] font-semibold text-form-label"
+      >
+        {label}
+      </label>
+      <div className="flex min-h-10 w-full flex-wrap items-center gap-1.5 rounded-[--radius] border border-input bg-input px-2.5 py-2 text-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/50">
         {chips.map((chip) => (
-          <Badge key={chip} variant="secondary" className="gap-1 pr-1">
+          <span
+            key={chip}
+            className="inline-flex items-center gap-1 rounded-[--radius-sm] bg-card px-2 py-0.5 text-sm text-form-label"
+          >
+            {leadingGlyph === "hash" ? (
+              <span
+                aria-hidden="true"
+                className="font-mono text-muted-foreground"
+              >
+                #
+              </span>
+            ) : (
+              <MapPin
+                aria-hidden="true"
+                className="size-3 text-muted-foreground"
+              />
+            )}
             {chip}
             <button
               type="button"
               onClick={() => removeChip(chip)}
-              className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10"
+              className="ml-0.5 text-muted-foreground hover:text-foreground"
               aria-label={`Remove ${chip}`}
             >
-              <X className="size-2.5" />
+              <X className="size-3" />
             </button>
-          </Badge>
+          </span>
         ))}
         <input
           id={inputId}
@@ -111,211 +180,220 @@ function ChipsInput({ label, placeholder, chips, onChange }: ChipsInputProps) {
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
           placeholder={chips.length === 0 ? placeholder : ""}
-          className="min-w-24 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+          className="min-w-28 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
         />
       </div>
-      <p className="text-xs text-muted-foreground">
-        Press Enter or comma to add
-      </p>
+      <p className="text-xs text-muted-foreground">Enter or comma to add</p>
     </div>
   );
 }
 
-// ---------- helper: progress phase text ----------
+// ---------- segmented control (string values) ----------
 
-function getPhaseText(run: RunStatus): string {
-  if (run.status === "failed") return "Ошибка выполнения";
-  if (run.status === "done") return "Готово";
-  if (run.processed > 0 || run.generated > 0) {
-    return "Анализируем соответствие…";
-  }
-  return "Собираем вакансии…";
+interface SegmentedControlProps {
+  options: { label: string; value: string }[];
+  value: string;
+  onChange: (value: string) => void;
 }
 
-// ---------- SearchForm (child) ----------
-// Receives resolved initial params at mount-time; no effect-seeding needed.
+function SegmentedControl({ options, value, onChange }: SegmentedControlProps) {
+  return (
+    <ToggleGroup
+      multiple={false}
+      value={value ? [value] : []}
+      onValueChange={(vals: string[]) => {
+        if (vals.length > 0) onChange(vals[0]);
+      }}
+      spacing={0}
+      className="w-fit rounded-[--radius] border border-input"
+    >
+      {options.map((opt) => (
+        <ToggleGroupItem
+          key={opt.value}
+          value={opt.value}
+          variant="default"
+          size="sm"
+          className="h-8 rounded-none px-3 text-sm text-muted-foreground first:rounded-l-[--radius-sm] last:rounded-r-[--radius-sm] aria-pressed:bg-segment-active aria-pressed:text-foreground"
+        >
+          {opt.label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+}
+
+// ---------- aggregate progress bar ----------
+
+interface RunProgressBarProps {
+  status: RunStatus | null | undefined;
+}
+
+function RunProgressBar({ status }: RunProgressBarProps) {
+  // to_process = processed (size of scoring queue)
+  // done_so_far = generated + skipped_low_fit (jobs that completed scoring)
+  const toProcess = status?.processed ?? 0;
+  const doneSoFar = (status?.generated ?? 0) + (status?.skipped_low_fit ?? 0);
+  const percent = toProcess > 0 ? Math.round((doneSoFar / toProcess) * 100) : 0;
+
+  // Early scraping phase: run is "running" but no jobs queued for scoring yet.
+  const isEarlyScraping = status?.status === "running" && toProcess === 0;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        {isEarlyScraping ? (
+          <span className="text-sm text-muted-foreground">Scraping…</span>
+        ) : (
+          <span className="text-sm text-muted-foreground">
+            Processing{" "}
+            <span className="font-mono text-foreground">{doneSoFar}</span>
+            {" / "}
+            <span className="font-mono text-foreground">{toProcess}</span>
+          </span>
+        )}
+        {!isEarlyScraping && (
+          <span className="font-mono text-sm text-muted-foreground">
+            {percent}%
+          </span>
+        )}
+      </div>
+      {/* bg-card track + bg-primary fill; semantic classes only, no raw hex */}
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-card">
+        <div
+          className="h-full bg-primary transition-all"
+          style={{ width: `${isEarlyScraping ? 0 : percent}%` }}
+          role="progressbar"
+          aria-valuenow={isEarlyScraping ? 0 : percent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---------- left-column search form ----------
 
 interface SearchFormProps {
-  initial: SearchParams;
-  savedParams: SearchParams | null;
-  onSave: (payload: SearchParams) => void;
-  onStart: () => void;
-  savePending: boolean;
-  isBusy: boolean;
+  form: FormState;
+  setForm: React.Dispatch<React.SetStateAction<FormState>>;
 }
 
-function SearchForm({
-  initial,
-  savedParams,
-  onSave,
-  onStart,
-  savePending,
-  isBusy,
-}: SearchFormProps) {
-  const [keywords, setKeywords] = useState<string[]>(initial.keywords);
-  const [locations, setLocations] = useState<string[]>(initial.locations);
-
-  const initialPreset = PERIOD_PRESETS.find(
-    (p) => p.value === initial.period_hours,
+function SearchForm({ form, setForm }: SearchFormProps) {
+  const patch = useCallback(
+    (partial: Partial<FormState>) =>
+      setForm((prev) => ({ ...prev, ...partial })),
+    [setForm],
   );
-  const [periodHours, setPeriodHours] = useState<number>(initial.period_hours);
-  const [customPeriod, setCustomPeriod] = useState<string>(
-    initialPreset ? "" : String(initial.period_hours),
-  );
-  const [useCustomPeriod, setUseCustomPeriod] = useState(!initialPreset);
-  const [workFormat, setWorkFormat] = useState<string>(initial.work_format);
-
-  const handlePeriodPreset = useCallback((value: number) => {
-    setPeriodHours(value);
-    setUseCustomPeriod(false);
-  }, []);
 
   const handleCustomPeriodChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const raw = e.target.value;
-      setCustomPeriod(raw);
       const parsed = parseInt(raw, 10);
-      if (!isNaN(parsed) && parsed > 0) {
-        setPeriodHours(parsed);
-      }
+      patch({
+        customPeriod: raw,
+        periodHours: !isNaN(parsed) && parsed > 0 ? parsed : form.periodHours,
+      });
     },
-    [],
+    [patch, form.periodHours],
   );
 
-  function buildPayload(): SearchParams {
-    return {
-      keywords,
-      locations,
-      period_hours: periodHours,
-      work_format: workFormat,
-      loose: savedParams?.loose ?? false,
-      targeted: savedParams?.targeted ?? false,
-    };
-  }
-
-  function handleSave() {
-    // FIX 3: guard invalid custom period before saving
-    if (useCustomPeriod) {
-      const parsed = parseInt(customPeriod, 10);
-      if (isNaN(parsed) || parsed <= 0) {
-        toast.error("Укажите корректное число часов");
-        return;
-      }
-    }
-    onSave(buildPayload());
-  }
-
-  function handleStartRun() {
-    // FIX 4: guard empty keywords
-    if (keywords.length === 0) {
-      toast.error("Добавьте хотя бы одно ключевое слово");
-      return;
-    }
-    // FIX 3: guard invalid custom period before starting
-    if (useCustomPeriod) {
-      const parsed = parseInt(customPeriod, 10);
-      if (isNaN(parsed) || parsed <= 0) {
-        toast.error("Укажите корректное число часов");
-        return;
-      }
-    }
-    onStart();
-  }
-
-  const activePeriodPreset = useCustomPeriod
-    ? null
-    : (PERIOD_PRESETS.find((p) => p.value === periodHours) ?? null);
+  // Active preset string value, or "" when custom is selected.
+  const activePeriodStrVal = form.useCustomPeriod
+    ? ""
+    : (PERIOD_PRESETS.find((p) => p.hours === form.periodHours)?.strVal ?? "");
 
   return (
     <div className="space-y-6">
       {/* Keywords */}
       <ChipsInput
-        label="Ключевые слова"
-        placeholder="Python, Backend, ML…"
-        chips={keywords}
-        onChange={setKeywords}
+        label="Keywords"
+        placeholder="Add keyword…"
+        chips={form.keywords}
+        onChange={(v) => patch({ keywords: v })}
+        leadingGlyph="hash"
       />
 
       {/* Locations */}
       <ChipsInput
-        label="Локации"
-        placeholder="Remote, Berlin, USA…"
-        chips={locations}
-        onChange={setLocations}
+        label="Locations"
+        placeholder="Add location…"
+        chips={form.locations}
+        onChange={(v) => patch({ locations: v })}
+        leadingGlyph="pin"
       />
 
-      {/* Period */}
-      <div className="space-y-1.5">
-        <Label>Период</Label>
-        <div className="flex flex-wrap gap-2">
-          {PERIOD_PRESETS.map((preset) => (
-            <Button
-              key={preset.value}
-              variant={
-                activePeriodPreset?.value === preset.value
-                  ? "default"
-                  : "outline"
-              }
-              size="sm"
-              onClick={() => handlePeriodPreset(preset.value)}
-              type="button"
-            >
-              {preset.label}
-            </Button>
-          ))}
-          <Button
-            variant={useCustomPeriod ? "default" : "outline"}
-            size="sm"
-            onClick={() => setUseCustomPeriod(true)}
+      {/* Posted within */}
+      <div className="space-y-2">
+        <p className="text-[15px] font-semibold text-form-label">
+          Posted within
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <SegmentedControl
+            options={PERIOD_PRESETS.map((p) => ({
+              label: p.label,
+              value: p.strVal,
+            }))}
+            value={activePeriodStrVal}
+            onChange={(strVal) => {
+              const preset = PERIOD_PRESETS.find((p) => p.strVal === strVal);
+              if (preset)
+                patch({
+                  periodHours: preset.hours,
+                  useCustomPeriod: false,
+                  customPeriod: "",
+                });
+            }}
+          />
+          <button
             type="button"
+            onClick={() => patch({ useCustomPeriod: true })}
+            className={[
+              "flex h-8 items-center rounded-[--radius] border px-3 text-sm transition-colors",
+              form.useCustomPeriod
+                ? "border-ring bg-segment-active text-foreground"
+                : "border-input bg-transparent text-muted-foreground hover:text-foreground",
+            ].join(" ")}
           >
-            Своё
-          </Button>
-        </div>
-        {useCustomPeriod && (
-          <div className="mt-2 flex items-center gap-2">
-            <Input
+            Custom{" "}
+            <span className="ml-1 font-mono text-muted-foreground">hrs</span>
+          </button>
+          {form.useCustomPeriod && (
+            <input
               type="number"
               min={1}
-              value={customPeriod}
+              value={form.customPeriod}
               onChange={handleCustomPeriodChange}
-              className="w-28"
-              placeholder="часов"
+              placeholder="120"
+              className="h-8 w-20 rounded-[--radius] border border-input bg-input px-2 font-mono text-sm text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/50"
             />
-            <span className="text-sm text-muted-foreground">часов</span>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Work format */}
-      <div className="space-y-1.5">
-        <Label>Формат работы</Label>
-        <div className="flex gap-2">
-          {WORK_FORMAT_OPTIONS.map((opt) => (
-            <Button
-              key={opt.value}
-              variant={workFormat === opt.value ? "default" : "outline"}
-              size="sm"
-              onClick={() => setWorkFormat(opt.value)}
-              type="button"
-            >
-              {opt.label}
-            </Button>
-          ))}
-        </div>
+      <div className="space-y-2">
+        <p className="text-[15px] font-semibold text-form-label">Work format</p>
+        <SegmentedControl
+          options={WORK_FORMAT_OPTIONS}
+          value={form.workFormat}
+          onChange={(v) => patch({ workFormat: v })}
+        />
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-wrap items-center gap-3 pt-2">
-        <Button variant="outline" onClick={handleSave} disabled={savePending}>
-          {savePending ? <Loader2 className="animate-spin" /> : null}
-          Сохранить параметры
-        </Button>
-
-        <Button onClick={handleStartRun} disabled={isBusy}>
-          {isBusy ? <Loader2 className="animate-spin" /> : <Play />}
-          Запустить поиск
-        </Button>
+      {/* Exclude senior */}
+      <div className="flex items-center gap-3">
+        <Switch
+          id="exclude-senior"
+          checked={form.excludeSenior}
+          onCheckedChange={(checked) => patch({ excludeSenior: checked })}
+        />
+        <label
+          htmlFor="exclude-senior"
+          className="cursor-pointer text-[15px] font-semibold text-form-label"
+        >
+          Exclude senior
+        </label>
       </div>
     </div>
   );
@@ -328,14 +406,19 @@ export default function SearchPage() {
   const queryClient = useQueryClient();
 
   /**
-   * Run id set by user actions (startMutation success / conflict).
-   * "__latest__" = attach to the most recent run.
+   * Run id set by user actions (startMutation success / 409-conflict attach).
+   * "__latest__" = attach to the most recent in-progress run.
    * null = no user-initiated run in this session.
    */
   const [userRunId, setUserRunId] = useState<string | null>(null);
 
-  // FIX 1: guard against double navigation / double toast on terminal status
+  // Guard against double navigation / double toast on terminal status.
   const finalizedRef = useRef(false);
+
+  // All form state in a single object to avoid cascading setState in effects.
+  const [form, setForm] = useState<FormState>(
+    makeFormState(DEFAULT_SEARCH_PARAMS),
+  );
 
   // ---------- 1. Check latest run on mount (restore-after-reload) ----------
   const {
@@ -349,10 +432,9 @@ export default function SearchPage() {
     retry: false,
   });
 
-  // Derive whether we are in progress mode.
-  // FIX 2 (restore path): instead of an effect that calls setState, derive activeRunId
-  // during render: if a user-initiated run is in flight, use it; otherwise fall back to the
-  // latest-run query result when it came back "running" (reload-restore path).
+  // Derive active run id.
+  // User-initiated run takes priority; fall back to "running" latest run on
+  // page reload (restore-after-reload path).
   const restoredRunId =
     latestRunFetched && latestRun?.status === "running" && userRunId === null
       ? "__latest__"
@@ -372,6 +454,15 @@ export default function SearchPage() {
     queryKey: ["search-params"],
     queryFn: getSearchParams,
   });
+
+  // Seed form state once saved params arrive (single setState call via makeFormState).
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (paramsFetched && !seededRef.current) {
+      seededRef.current = true;
+      setForm(makeFormState(savedParams ?? DEFAULT_SEARCH_PARAMS));
+    }
+  }, [paramsFetched, savedParams]);
 
   useEffect(() => {
     if (paramsError) {
@@ -401,9 +492,7 @@ export default function SearchPage() {
     staleTime: 0,
   });
 
-  // FIX 1 + FIX 2: handle terminal run status with a run-once guard (no setTimeout).
-  // finalizedRef prevents double navigation / double toast when TanStack Query
-  // re-delivers a cached 'done'/'failed' before invalidation propagates.
+  // Handle terminal run status with a run-once guard (finalizedRef).
   useEffect(() => {
     if (!runStatus) return;
     if (runStatus.status === "done" && !finalizedRef.current) {
@@ -414,7 +503,7 @@ export default function SearchPage() {
     } else if (runStatus.status === "failed" && !finalizedRef.current) {
       finalizedRef.current = true;
       setUserRunId(null);
-      toast.error(runStatus.error ?? "Поиск завершился с ошибкой");
+      toast.error(runStatus.error ?? "Search run failed");
     }
   }, [runStatus, router, queryClient]);
 
@@ -423,7 +512,7 @@ export default function SearchPage() {
       toast.error(
         runError instanceof Error
           ? runError.message
-          : "Не удалось получить статус поиска",
+          : "Couldn't get run status",
       );
     }
   }, [runError]);
@@ -434,7 +523,6 @@ export default function SearchPage() {
     mutationFn: putSearchParams,
     onSuccess: (data) => {
       queryClient.setQueryData(["search-params"], data);
-      toast.success("Параметры сохранены.");
     },
     onError: (err) => {
       toast.error(
@@ -446,129 +534,158 @@ export default function SearchPage() {
   const startMutation = useMutation({
     mutationFn: startRun,
     onSuccess: (data) => {
-      // FIX 1: reset finalized guard for a brand-new run
       finalizedRef.current = false;
       setUserRunId(data.run_id);
     },
     onError: (err) => {
       if (err instanceof RunConflictError) {
-        toast.info("Поиск уже выполняется");
-        // FIX 1: reset finalized guard when attaching to an existing run via 409
+        // 409: a run is already in progress — attach to it.
+        toast.info("A run is already in progress — attaching…");
         finalizedRef.current = false;
         setUserRunId("__latest__");
       } else {
-        toast.error(
-          err instanceof Error ? err.message : "Не удалось запустить поиск",
-        );
+        toast.error(err instanceof Error ? err.message : "Failed to start run");
       }
     },
   });
 
   // ---------- derived ----------
   const isRunning = runStatus?.status === "running";
-  const isBusy = startMutation.isPending || isRunning;
+  const isBusy = startMutation.isPending || isRunning || inProgressMode;
+  const hasKeywords = form.keywords.some((k) => k.trim().length > 0);
 
-  // ---------- loading: waiting to know if there's an active run ----------
+  function buildPayload(): SearchParams {
+    return {
+      keywords: form.keywords,
+      locations: form.locations,
+      period_hours: form.periodHours,
+      work_format: form.workFormat,
+      loose: savedParams?.loose ?? false,
+      targeted: savedParams?.targeted ?? false,
+      exclude_senior: form.excludeSenior,
+    };
+  }
+
+  // PUT /search-params then POST /run — single "Run search" action.
+  async function handleRunSearch() {
+    if (!hasKeywords) return;
+    if (form.useCustomPeriod) {
+      const parsed = parseInt(form.customPeriod, 10);
+      if (isNaN(parsed) || parsed <= 0) {
+        toast.error("Enter a valid number of hours");
+        return;
+      }
+    }
+    try {
+      await saveMutation.mutateAsync(buildPayload());
+    } catch {
+      // Error already toasted by mutation onError handler.
+      return;
+    }
+    startMutation.mutate();
+  }
+
+  // ---------- loading skeleton ----------
   if (latestRunLoading) {
     return (
-      <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-8">
-        <div className="mb-6 flex items-center gap-2">
-          <Skeleton className="h-7 w-20" />
-          <Skeleton className="h-5 w-40" />
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
+        <div className="mb-6 space-y-1">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-6 w-32" />
         </div>
-        <div className="space-y-4">
-          <Skeleton className="h-20 w-full" />
-          <Skeleton className="h-20 w-full" />
-          <Skeleton className="h-10 w-full" />
+        <div className="grid gap-8 md:grid-cols-[1fr_300px]">
+          <div className="space-y-6">
+            <Skeleton className="h-24 w-full" />
+            <Skeleton className="h-24 w-full" />
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-full" />
+          </div>
+          <div className="space-y-4">
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-48 w-full" />
+          </div>
         </div>
       </main>
     );
   }
 
-  // ---------- progress mode ----------
-  if (inProgressMode) {
-    const status = runStatus ?? latestRun;
-    const scraped = status?.scraped ?? 0;
-    const processed = status?.processed ?? 0;
-    const generated = status?.generated ?? 0;
-    const phaseText = status ? getPhaseText(status) : "Запускаем поиск…";
+  // Live status for the right-panel progress display.
+  const displayStatus = inProgressMode ? (runStatus ?? latestRun) : null;
 
-    return (
-      <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-8">
-        <div className="mb-6 flex items-center gap-2">
-          <Link
-            href="/"
-            className={buttonVariants({ variant: "ghost", size: "sm" })}
-          >
-            <ArrowLeft />
-            Back
-          </Link>
-          <h1 className="text-lg font-semibold">Поиск вакансий</h1>
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Loader2 className="size-4 animate-spin text-primary" />
-              {phaseText}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-3 gap-4 py-2 text-center">
-              <div>
-                <p className="text-2xl font-semibold tabular-nums">{scraped}</p>
-                <p className="text-xs text-muted-foreground">Собрано</p>
-              </div>
-              <div>
-                <p className="text-2xl font-semibold tabular-nums">
-                  {processed}
-                </p>
-                <p className="text-xs text-muted-foreground">Обработано</p>
-              </div>
-              <div>
-                <p className="text-2xl font-semibold tabular-nums">
-                  {generated}
-                </p>
-                <p className="text-xs text-muted-foreground">Подходящих</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </main>
-    );
-  }
-
-  // ---------- form mode ----------
+  // ---------- page ----------
   return (
-    <main className="mx-auto w-full max-w-2xl flex-1 px-4 py-8">
-      <div className="mb-6 flex items-center gap-2">
-        <Link
-          href="/"
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
-        >
-          <ArrowLeft />
-          Back
-        </Link>
-        <h1 className="text-lg font-semibold">Параметры поиска</h1>
+    <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
+      {/* Page header */}
+      <div className="mb-6">
+        <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+          JOB SEARCH
+        </p>
+        <h1 className="mt-1 text-xl font-semibold text-foreground">
+          New search
+        </h1>
       </div>
 
-      {paramsLoading ? (
-        <div className="space-y-4">
-          <Skeleton className="h-20 w-full" />
-          <Skeleton className="h-20 w-full" />
-          <Skeleton className="h-14 w-full" />
-          <Skeleton className="h-10 w-40" />
+      {/* Desktop 2-column: left = form, right = run control */}
+      <div className="grid gap-0 md:grid-cols-[1fr_300px]">
+        {/* LEFT — search params form */}
+        <div className="border-border pr-0 md:border-r md:pr-8">
+          {paramsLoading ? (
+            <div className="space-y-6">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-8 w-40" />
+            </div>
+          ) : (
+            <SearchForm form={form} setForm={setForm} />
+          )}
         </div>
-      ) : paramsFetched ? (
-        <SearchForm
-          initial={savedParams ?? DEFAULT_SEARCH_PARAMS}
-          savedParams={savedParams ?? null}
-          onSave={(payload) => saveMutation.mutate(payload)}
-          onStart={() => startMutation.mutate()}
-          savePending={saveMutation.isPending}
-          isBusy={isBusy}
-        />
-      ) : null}
+
+        {/* RIGHT — run control */}
+        <div className="mt-8 flex flex-col gap-6 pl-0 md:mt-0 md:pl-8">
+          {/* Aggregate progress bar — visible only while a run is active */}
+          {inProgressMode && (
+            <div className="space-y-3 rounded-[--radius] border border-border bg-card p-4">
+              <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+                PROGRESS
+              </p>
+              <RunProgressBar status={displayStatus} />
+            </div>
+          )}
+
+          {/* Run search — PUT /search-params then POST /run in one click */}
+          <div className="space-y-1.5">
+            <Button
+              className="w-full bg-primary text-primary-foreground hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => void handleRunSearch()}
+              disabled={isBusy || !hasKeywords}
+            >
+              {inProgressMode ? "Running…" : "Run search"}
+            </Button>
+            {/* STEP 4 — empty-keywords guard: helper text below the button */}
+            {!hasKeywords && !isBusy && (
+              <p className="text-center text-xs text-muted-foreground">
+                Add at least one keyword to run a search
+              </p>
+            )}
+          </div>
+
+          {/* Searched sources — static info list (no live per-source status; deferred) */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+              SEARCHED SOURCES
+            </p>
+            <ul className="divide-y divide-border rounded-[--radius] border border-border">
+              {SEARCH_SOURCES.map((source) => (
+                <li key={source} className="px-3 py-2 text-sm text-foreground">
+                  {source}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
     </main>
   );
 }

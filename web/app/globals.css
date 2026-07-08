@@ -8,7 +8,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-mono: var(--font-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -39,6 +39,9 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-form-label: var(--form-label);
+  --color-segment-active: var(--segment-active);
+  --color-primary-hover: var(--primary-hover);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -55,7 +58,6 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  /* Brand accent ≈ #2E5A8C (a calm blue) as primary. */
   --primary: oklch(0.46 0.095 254);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
@@ -82,41 +84,64 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* Status dot variables — used by progress states and (future) per-source rows */
+  --status-queued: #5a616b;
+  --status-running: #c7994c;
+  --status-done: #4e9a6b;
+  --status-error: #c0564e;
+  /* Form-group label (lighter than foreground, brighter than muted) */
+  --form-label: oklch(0.3 0 0);
+  /* Segmented-control active fill */
+  --segment-active: oklch(0.92 0 0);
+  /* Primary button hover */
+  --primary-hover: oklch(0.4 0.09 254);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  /* Brand accent, brightened for dark backgrounds. */
-  --primary: oklch(0.62 0.13 254);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.62 0.13 254);
+  /* Graphite dark palette — values from web/CLAUDE.md §1 */
+  --background: #0c0e11;
+  --foreground: #eceef1;
+  --card: #1b1e24;
+  --card-foreground: #eceef1;
+  --popover: #1b1e24;
+  --popover-foreground: #eceef1;
+  /* Muted slate-blue accent — dark label is intentional (#14171F on #5F7296) */
+  --primary: #5f7296;
+  --primary-foreground: #14171f;
+  --secondary: #23262d;
+  --secondary-foreground: #eceef1;
+  --muted: #1b1e24;
+  --muted-foreground: #8a9099;
+  --accent: #23262d;
+  --accent-foreground: #eceef1;
+  --destructive: #c0564e;
+  --border: #1f2229;
+  --input: #23262d;
+  --ring: #5f7296;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: #1b1e24;
+  --sidebar-foreground: #eceef1;
+  --sidebar-primary: #5f7296;
+  --sidebar-primary-foreground: #14171f;
+  --sidebar-accent: #23262d;
+  --sidebar-accent-foreground: #eceef1;
+  --sidebar-border: #1f2229;
+  --sidebar-ring: #5f7296;
+  /* Status dot variables */
+  --status-queued: #5a616b;
+  --status-running: #c7994c;
+  --status-done: #4e9a6b;
+  --status-error: #c0564e;
+  /* Form-group label color (brighter than muted, below --foreground) */
+  --form-label: #d3d7dd;
+  /* Segmented-control active fill (elevated neutral gray, no accent tint) */
+  --segment-active: #282c34;
+  /* Primary button hover (slightly darker than --primary) */
+  --primary-hover: #556688;
 }
 
 @layer base {
