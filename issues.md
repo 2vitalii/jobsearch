@@ -14,6 +14,7 @@ last_verified_commit: fca6a73f166f70c00c620e7f3cc3e52c697468d9
 - [ ] Pagination on /results is deferred — match sets are small (unique(user_id, job_id) dedup). Implement if sets grow beyond ~50. (backlog, web)
 - [ ] SG-03 migration 0008_runs_table.sql must be applied by hand in the Supabase SQL Editor (runs table + RLS + partial unique index). Code is merged but the table does not exist until applied.
 - [ ] Migration 0009_matches_add_run_snapshot.sql must be applied by hand in Supabase (matches.run_id FK + index, runs.search_snapshot). Apply AFTER 0008. Code merged (71eaf20) but columns don't exist until applied.
+- [ ] CORS headers missing on backend error responses (api/main.py CORSMiddleware). When an endpoint returns 500 (or any unhandled exception), the response carries NO `Access-Control-Allow-Origin` header, so the browser reports an opaque "Load failed" / "No Access-Control-Allow-Origin header" instead of the real status/cause — masking backend errors and making them hard to diagnose from the frontend (observed on GET /search-params, /run/latest when the backend ran without Supabase env → 500). Fix: ensure CORS headers are emitted on error responses too (e.g. a custom exception handler that adds the ACAO header, or the Starlette CORS-on-error pattern), so future backend errors surface a real status/message in the browser. Separate task (branch + gates); backend, api/main.py. (tech-debt, backend/observability)
 
 ## Flagged — Product Differentiator (near-term backlog, NOT ordinary tech-debt)
 
