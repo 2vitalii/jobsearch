@@ -28,6 +28,7 @@ export const SearchParamsSchema = z.object({
   work_format: z.string().default("remote"),
   loose: z.boolean().default(false),
   targeted: z.boolean().default(false),
+  exclude_senior: z.boolean().default(false),
 });
 export type SearchParams = z.infer<typeof SearchParamsSchema>;
 

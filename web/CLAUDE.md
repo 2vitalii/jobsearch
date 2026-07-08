@@ -17,10 +17,11 @@
 > block when that screenshot arrives.
 
 ### Rules (unchanged)
+
 - **UI only from `web/components/ui` (shadcn) + Tailwind tokens.** No inline styles, no
   arbitrary hex/`rgb()` in components. Colors come from CSS variables / semantic Tailwind
   classes (`bg-background`, `bg-primary`, `text-muted-foreground`, `border-border`, …).
-  The hex values in this doc define the *tokens* (in `globals.css` / theme) — components
+  The hex values in this doc define the _tokens_ (in `globals.css` / theme) — components
   reference the semantic class, never the raw hex.
 - New primitive needed? Add it via `npx shadcn@latest add <name>` (it lands in
   `components/ui` and we own it). Don't hand-roll buttons/inputs/dialogs.
@@ -53,6 +54,7 @@
 | form-group label | "Keywords / Locations / Posted within…" — brighter, medium weight | `#D3D7DD` |
 
 **Accent — Run button + progress fill (`--primary`)**
+
 - Muted mid-tone **slate-blue / periwinkle** — desaturated, NOT the old bright `#2E5A8C`.
 - `--primary`: `#5F7296` (read from the Run button & the progress-bar fill).
 - `--primary-foreground` (Run-button label): **dark**, near-black slate `#14171F` — the button
@@ -60,6 +62,7 @@
 - Replaces the previous `--primary ≈ #2E5A8C`. Do not reintroduce the bright blue anywhere.
 
 **Chips — two variants of one component**, both with a trailing `×` to remove:
+
 - **Same fill/border for both** — `--card` `#1B1E24`, text `#D3D7DD`, `×` in `--muted-foreground`.
   The ONLY visual difference is the leading glyph — no color/tint delta. (Correction: the
   earlier "cooler blue-tinted location chip" was wrong.)
@@ -76,6 +79,7 @@ saturation/brightness as the rest of the UI — never vivid):
 | `error` | muted red/terracotta `#C0564E` | chosen |
 
 ### 2. Typography
+
 Two families, strict split by content type.
 
 - **IBM Plex Mono** — **all numbers & data**, no exceptions: hero metrics (`3,120` / `350` /
@@ -87,6 +91,7 @@ Two families, strict split by content type.
   chip text. Wired in `app/layout.tsx` as `--font-sans` (unchanged).
 
 **Two distinct label styles — do not conflate:**
+
 - **Uppercase tracked label** (muted, letter-spacing ~0.1em, ~11px): brand "JOB SEARCH",
   metric labels "ESTIMATED MATCHES / TO PROCESS / COVERAGE / SOURCES", column headers
   "SOURCE / STATUS". Color = label tier `#787F89`.
@@ -103,6 +108,7 @@ Two families, strict split by content type.
 | Numbers (metrics, stepper, progress, segment) | IBM Plex Mono | 400 (13–48px per use) | — |
 
 ### 3. Component patterns
+
 Documentation only — implement in 5c/5d, not now.
 
 - **Metric card** (top panel, ×4, full-width row): uppercase tracked muted label on top
@@ -130,6 +136,7 @@ Documentation only — implement in 5c/5d, not now.
   - disabled: reduced opacity / muted graphite fill, non-interactive (while a run is in progress).
 
 ### Layout reference (Search & Run, 5c)
+
 Full-width top row of 4 metric cards (bg split by vertical hairlines). Below: two columns split
 by a vertical `--border`. **Left** = search-params form (Keywords chips, Locations chips,
 Posted-within segmented, Work-format segmented, Processing-limit stepper). **Right** = SOURCE/STATUS
@@ -137,6 +144,7 @@ header, source rows list, progress bar, and the full-width Run-search CTA pinned
 (Exact grid columns/spacing to lock during 5c.)
 
 ## Data fetching — non-negotiable
+
 - Every backend call goes through `web/lib/api.ts` (`apiFetch`/typed helpers): it attaches
   the Supabase access token as `Authorization: Bearer` and **validates the response with a
   Zod schema from `web/lib/schemas.ts`**. Add a schema there for every new endpoint.
@@ -145,6 +153,7 @@ header, source rows list, progress bar, and the full-width Run-search CTA pinned
   (sonner)**. Don't leave a blank screen.
 
 ## Auth
+
 - Supabase clients: `utils/supabase/{client,server,middleware}.ts`. Use the browser client
   in client components/handlers, the server client in Server Components, and never trust
   `getSession()` for gating server-side — use `getUser()`. The publishable key is the only
@@ -152,6 +161,7 @@ header, source rows list, progress bar, and the full-width Run-search CTA pinned
   must NEVER be in `web/`.
 
 ## TypeScript & quality gate
+
 - `strict: true`, **no `any`**. Prefer `unknown` + Zod at boundaries.
 - Before every commit: `npm run typecheck` (tsc --noEmit) **clean**, `npm run lint` (eslint)
   **clean**, `npm run build` **passes**, `npm run format` applied.
