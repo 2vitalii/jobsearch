@@ -42,11 +42,18 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
-  if (!user && !isPublic) {
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/login";
-    return NextResponse.redirect(redirectUrl);
+
+  // "/" is the public marketing landing. Authed users on "/" go straight to the app.
+  const isRoot = path === "/";
+  if (isRoot && user)
+    return NextResponse.redirect(new URL("/search", request.url));
+  if (!isRoot) {
+    const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
+    if (!user && !isPublic) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/login";
+      return NextResponse.redirect(redirectUrl);
+    }
   }
 
   return supabaseResponse;
