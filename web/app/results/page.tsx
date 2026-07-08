@@ -114,8 +114,12 @@ function VerdictChip({ verdict }: VerdictChipProps) {
     ? VERDICT_STYLES[category]
     : "border-border text-muted-foreground bg-card";
 
-  // Show the first word as the chip label
-  const label = verdict.trim().split(/\s+/)[0] ?? verdict;
+  // Chip label: the clean category (Shortlist/Maybe/Reject) when recognized,
+  // else the leading word with trailing punctuation stripped. Full verdict text
+  // is shown verbatim in the expanded "Recruiter verdict" section.
+  const label = category
+    ? category.charAt(0).toUpperCase() + category.slice(1)
+    : (verdict.trim().split(/\s+/)[0]?.replace(/\W+$/, "") ?? "");
 
   return (
     <span
