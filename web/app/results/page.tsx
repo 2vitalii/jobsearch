@@ -624,15 +624,30 @@ export default function ResultsPage() {
           return r === regionFilter;
         });
 
+  // b2b rank helper: yes=0, maybe=1, no=2, missing/other=3 (lower = better)
+  function b2bRank(b2b: string | null | undefined): number {
+    if (b2b === "yes") return 0;
+    if (b2b === "maybe") return 1;
+    if (b2b === "no") return 2;
+    return 3;
+  }
+
   // Client-side sort
+  // Primary key: fit_score desc (for "fit") or created_at desc (for "newest").
+  // Secondary tiebreak (always): b2b_eligible asc (yes > maybe > no > unknown).
   const sorted = [...filtered].sort((a, b) => {
     if (sortKey === "fit") {
       const aScore = a.fit_score ?? -1;
       const bScore = b.fit_score ?? -1;
-      return bScore - aScore;
+      if (bScore !== aScore) return bScore - aScore;
+      // Equal fit_score — tiebreak by b2b rank
+      return b2bRank(a.b2b_eligible) - b2bRank(b.b2b_eligible);
     }
-    // "newest" — created_at desc
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    // "newest" — created_at desc, tiebreak by b2b rank
+    const timeDiff =
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    if (timeDiff !== 0) return timeDiff;
+    return b2bRank(a.b2b_eligible) - b2bRank(b.b2b_eligible);
   });
 
   // Regions present in current data (for filter options)
