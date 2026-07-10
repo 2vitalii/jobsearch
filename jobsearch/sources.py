@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import html
 import os
+import re
 import sys
 
 try:
@@ -107,6 +108,82 @@ VALID_JOBSPY_COUNTRIES = {
     "usa", "us", "united states", "uruguay", "venezuela", "vietnam", "worldwide",
 }
 
+# ---------------------------------------------------------------------------
+# Location normalization constants + helper
+# ---------------------------------------------------------------------------
+
+# Top EU job markets using EXACT canonical names from VALID_JOBSPY_COUNTRIES.
+# Deliberately a curated subset (~8 markets) so that EU-expansion + a couple of
+# role keywords stays under the MAX_QUERY_COMBINATIONS cap introduced in C2.
+# Do NOT derive from filters.EU_COUNTRY_NAMES — it contains "czech" (not a valid
+# JobSpy country; should be "czech republic"/"czechia") and uk/united-kingdom dupes.
+EU_EXPANSION_COUNTRIES = [
+    "germany", "netherlands", "ireland", "poland", "spain", "france", "sweden", "italy",
+]
+
+# Input strings (lower-cased, stripped) that should be expanded to EU_EXPANSION_COUNTRIES.
+REGION_ALIASES: set[str] = {"european union", "eu", "emea", "europe"}
+
+# Regex that strips work-format suffixes ANCHORED TO THE END of the string only.
+# Matches: " (Remote)", " (Hybrid)", " (On-site)", " (Onsite)", " (On site)"
+#       or " - Remote", " — Remote", " - Hybrid", " — On-site", etc.
+# Internal occurrences (e.g. "Remote Foods Inc (Remote)" → keep "Remote Foods Inc")
+# are handled automatically because we anchor with `$`.
+_SUFFIX_RE = re.compile(
+    r"(?:"
+    r"\s*\(\s*(?:remote|hybrid|on[\-\s]?site|onsite)\s*\)"   # trailing (Remote|Hybrid|On-site|…)
+    r"|"
+    r"\s*[-—]\s*(?:remote|hybrid|on[\-\s]?site|onsite)"  # trailing – Remote / — Hybrid / …
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_locations(locations: list[str]) -> list[str]:
+    """Normalize and optionally expand a list of raw user-supplied location strings.
+
+    Steps (applied per entry):
+    1. Strip work-format suffixes anchored to the END of the string (case-insensitive).
+       e.g. "Poland (Remote)" -> "Poland";  "Remote Foods Inc (Remote)" -> "Remote Foods Inc".
+    2. If the cleaned lower-cased string is a REGION_ALIAS -> expand to EU_EXPANSION_COUNTRIES.
+    3. Else if not in VALID_JOBSPY_COUNTRIES -> keep as-is (best-effort passthrough to
+       LinkedIn+Google) but emit a clear warning.
+    4. Deduplicate the resulting list preserving order (EU expansion may overlap an
+       explicitly-added country).
+
+    Returns the normalized/expanded list.
+    """
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for raw in locations:
+        # Step 1: strip trailing work-format suffix.
+        cleaned = _SUFFIX_RE.sub("", raw).strip()
+        lower = cleaned.lower()
+
+        # Step 2: region alias -> expand.
+        if lower in REGION_ALIASES:
+            print(f"  [locations] '{raw}' → {EU_EXPANSION_COUNTRIES}")
+            for country in EU_EXPANSION_COUNTRIES:
+                if country not in seen:
+                    seen.add(country)
+                    result.append(country)
+        else:
+            # Step 3: validate against known JobSpy countries; warn on unknown.
+            if lower not in VALID_JOBSPY_COUNTRIES:
+                print(
+                    f"  [locations] unrecognized '{cleaned}' → treated as region "
+                    f"(LinkedIn+Google only), results may be sparse"
+                )
+            # Step 4: dedupe.
+            key = lower  # use lower-cased form as dedup key, but append original cleaned string
+            if key not in seen:
+                seen.add(key)
+                result.append(cleaned)
+
+    return result
+
+
 # (url, trust): customer-support — доверяем категории (там бывают нестандартные тайтлы);
 # остальным применяем фильтр роли по названию.
 WWR_FEEDS = [
@@ -151,6 +228,9 @@ def collect_jobspy(params: SearchParams) -> list:
     jobs = []
     debug = _filter_debug()
 
+    # Normalize + expand locations before the loop (strip suffixes, expand EU/EMEA aliases).
+    locations = _normalize_locations(params.locations)
+
     # Always-on stale-drop counter (visible in normal runs, not just FILTER_DEBUG).
     _stale_dropped: int = 0
 
@@ -165,7 +245,7 @@ def collect_jobspy(params: SearchParams) -> list:
             "empty_title": [], "blocked": [], "not_role": [], "not_remote": [], "not_fresh": [],
         }
 
-    for country in params.locations:
+    for country in locations:
         is_region = country.strip().lower() not in VALID_JOBSPY_COUNTRIES
         if is_region:
             sites = [x for x in JOBSPY_SITES if x != "indeed"] or ["linkedin"]
