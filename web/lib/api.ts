@@ -15,6 +15,8 @@ import {
   type MatchListItem,
   MatchDetailSchema,
   type MatchDetail,
+  SuggestRolesResponseSchema,
+  type SuggestRolesResponse,
 } from "@/lib/schemas";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
@@ -198,6 +200,13 @@ export function getMatches(): Promise<MatchListItem[]> {
 /** GET /matches/{id} — single match with signed_cv_url. */
 export function getMatch(id: string): Promise<MatchDetail> {
   return apiFetch(`/matches/${id}`, MatchDetailSchema);
+}
+
+/** POST /cv/suggest-roles — extract 5-8 searchable job titles from the user's CV. */
+export function suggestRolesFromCV(): Promise<SuggestRolesResponse> {
+  return apiFetch("/cv/suggest-roles", SuggestRolesResponseSchema, {
+    method: "POST",
+  });
 }
 
 /**

@@ -14,7 +14,7 @@ import io
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
-from jobsearch.cv import make_short_profile, parse_cv
+from jobsearch.cv import make_short_profile, parse_cv, suggest_search_roles
 from jobsearch.models import PlatformConfig
 
 from .auth import CurrentUser, get_current_user
@@ -36,6 +36,10 @@ class CvOut(BaseModel):
 
 class CvPut(BaseModel):
     markdown: str
+
+
+class SuggestRolesOut(BaseModel):
+    roles: list[str]
 
 
 def _extract_pdf(data: bytes) -> str:
@@ -120,6 +124,28 @@ def get_cv(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No CV yet")
     row = res.data[0]
     return CvOut(markdown=row["markdown"], short_profile=row.get("short_profile") or "")
+
+
+@router.post("/suggest-roles", response_model=SuggestRolesOut)
+def suggest_roles(
+    user: CurrentUser = Depends(get_current_user),
+    supabase=Depends(get_user_client),
+    llm=Depends(get_llm),
+    config: PlatformConfig = Depends(get_config),
+) -> SuggestRolesOut:
+    """Extract 5-8 searchable job titles from the user's CV using the LLM."""
+    res = (
+        supabase.table("cvs")
+        .select("markdown")
+        .eq("user_id", user.user_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No CV yet")
+    markdown = res.data[0]["markdown"] or ""
+    roles = suggest_search_roles(markdown, llm, config)
+    return SuggestRolesOut(roles=roles)
 
 
 @router.put("", response_model=CvOut)

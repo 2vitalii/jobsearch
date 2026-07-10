@@ -4,13 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { MapPin, X } from "lucide-react";
+import { MapPin, Sparkles, X } from "lucide-react";
 import {
+  getCv,
   getSearchParams,
   putSearchParams,
   startRun,
   getRun,
   getLatestRun,
+  suggestRolesFromCV,
   RunConflictError,
 } from "@/lib/api";
 import type { SearchParams, RunStatus } from "@/lib/schemas";
@@ -277,9 +279,23 @@ function RunProgressBar({ status }: RunProgressBarProps) {
 interface SearchFormProps {
   form: FormState;
   setForm: React.Dispatch<React.SetStateAction<FormState>>;
+  hasCv: boolean;
+  onSuggestRoles: () => void;
+  isSuggesting: boolean;
+  /** Roles returned by the LLM but not yet added to keywords (add-buttons). */
+  pendingRoles: string[];
+  onAddPendingRole: (role: string) => void;
 }
 
-function SearchForm({ form, setForm }: SearchFormProps) {
+function SearchForm({
+  form,
+  setForm,
+  hasCv,
+  onSuggestRoles,
+  isSuggesting,
+  pendingRoles,
+  onAddPendingRole,
+}: SearchFormProps) {
   const patch = useCallback(
     (partial: Partial<FormState>) =>
       setForm((prev) => ({ ...prev, ...partial })),
@@ -306,13 +322,43 @@ function SearchForm({ form, setForm }: SearchFormProps) {
   return (
     <div className="space-y-6">
       {/* Keywords */}
-      <ChipsInput
-        label="Keywords"
-        placeholder="Add keyword…"
-        chips={form.keywords}
-        onChange={(v) => patch({ keywords: v })}
-        leadingGlyph="hash"
-      />
+      <div className="space-y-2">
+        <ChipsInput
+          label="Keywords"
+          placeholder="Add keyword…"
+          chips={form.keywords}
+          onChange={(v) => patch({ keywords: v })}
+          leadingGlyph="hash"
+        />
+        {/* "Suggest from CV" button — shown only when user has a CV */}
+        {hasCv && (
+          <button
+            type="button"
+            onClick={onSuggestRoles}
+            disabled={isSuggesting}
+            className="inline-flex items-center gap-1.5 rounded-[--radius] border border-input bg-transparent px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Sparkles className="size-3" />
+            {isSuggesting ? "Suggesting…" : "Suggest from CV"}
+          </button>
+        )}
+        {/* Clickable add-buttons for remaining suggested roles (not yet added) */}
+        {pendingRoles.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {pendingRoles.map((role) => (
+              <button
+                key={role}
+                type="button"
+                onClick={() => onAddPendingRole(role)}
+                className="inline-flex items-center gap-1 rounded-[--radius-sm] border border-input bg-transparent px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-ring hover:text-foreground"
+              >
+                <span aria-hidden="true">+</span>
+                {role}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Locations */}
       <ChipsInput
@@ -420,6 +466,9 @@ export default function SearchPage() {
     makeFormState(DEFAULT_SEARCH_PARAMS),
   );
 
+  // Suggested roles returned by LLM but not yet added to keywords.
+  const [pendingRoles, setPendingRoles] = useState<string[]>([]);
+
   // ---------- 1. Check latest run on mount (restore-after-reload) ----------
   const {
     data: latestRun,
@@ -442,6 +491,15 @@ export default function SearchPage() {
 
   const activeRunId = userRunId ?? restoredRunId;
   const inProgressMode = activeRunId !== null;
+
+  // ---------- 1b. Check whether the user has a CV (gates "Suggest from CV" button) ----------
+  const { data: cvData } = useQuery({
+    queryKey: ["cv"],
+    queryFn: getCv,
+    staleTime: 60_000, // re-check at most once per minute
+    retry: false,
+  });
+  const hasCv = cvData !== null && cvData !== undefined;
 
   // ---------- 2. Load saved search params ----------
   const {
@@ -549,10 +607,53 @@ export default function SearchPage() {
     },
   });
 
+  const suggestMutation = useMutation({
+    mutationFn: suggestRolesFromCV,
+    onSuccess: (data) => {
+      const roles = data.roles;
+      if (roles.length === 0) {
+        toast.info("No role suggestions returned — try updating your CV.");
+        return;
+      }
+      // Auto-add the first 3-4 roles to form.keywords (skip duplicates).
+      const AUTO_ADD_COUNT = 4;
+      const toAdd = roles.slice(0, AUTO_ADD_COUNT);
+      const rest = roles.slice(AUTO_ADD_COUNT);
+      setForm((prev) => {
+        const existing = new Set(prev.keywords);
+        const newKeywords = [...prev.keywords];
+        for (const role of toAdd) {
+          if (!existing.has(role)) {
+            existing.add(role);
+            newKeywords.push(role);
+          }
+        }
+        return { ...prev, keywords: newKeywords };
+      });
+      // Remaining roles shown as clickable add-buttons (filter out those already in keywords).
+      setForm((prev) => {
+        const existing = new Set(prev.keywords);
+        setPendingRoles(rest.filter((r) => !existing.has(r)));
+        return prev;
+      });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to suggest roles");
+    },
+  });
+
   // ---------- derived ----------
   const isRunning = runStatus?.status === "running";
   const isBusy = startMutation.isPending || isRunning || inProgressMode;
   const hasKeywords = form.keywords.some((k) => k.trim().length > 0);
+
+  function handleAddPendingRole(role: string) {
+    setForm((prev) => {
+      if (prev.keywords.includes(role)) return prev;
+      return { ...prev, keywords: [...prev.keywords, role] };
+    });
+    setPendingRoles((prev) => prev.filter((r) => r !== role));
+  }
 
   function buildPayload(): SearchParams {
     return {
@@ -638,7 +739,15 @@ export default function SearchPage() {
               <Skeleton className="h-8 w-40" />
             </div>
           ) : (
-            <SearchForm form={form} setForm={setForm} />
+            <SearchForm
+              form={form}
+              setForm={setForm}
+              hasCv={hasCv}
+              onSuggestRoles={() => suggestMutation.mutate()}
+              isSuggesting={suggestMutation.isPending}
+              pendingRoles={pendingRoles}
+              onAddPendingRole={handleAddPendingRole}
+            />
           )}
         </div>
 
