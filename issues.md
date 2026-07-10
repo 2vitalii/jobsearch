@@ -45,6 +45,8 @@ this as a minor TODO — it directly drives monetisation and the user's trust in
 - [~] feat: dynamic role/seniority filter — matches_role/blocked parametrized, exclude_senior field, 0010 migration file. Branch feat/dynamic-role-filter. Awaiting PM gate before PR.
 - [~] fix(sources)+feat(matches)+feat(results): freshness post-filter, real vacancy date, b2b sort tiebreak. Branch feat/freshness-date-b2b-rank. 3 commits (4a29342, 1b58c8d, d51f07d). Awaiting PM Gate 2 before PR. Migration 0011 must be applied by hand in Supabase SQL Editor.
   Known limitation: substring keyword match may miss synonyms (e.g. "support engineer" won't match "Customer Care Specialist"). Mitigated by score_fit/analyze as authoritative relevance gate + loose=True flag.
+- [~] feat: location normalization + EU expansion + combo cap + suggest-roles from CV. Branch feat/coverage-multirole-locations. 3 commits (e86a0ee, 0505639, 7e18d7a). Awaiting PM Gate 2 before PR. No migrations required.
+  Known pre-existing issue (not caused by this branch): test_api_search_params::test_put_persists_and_get_returns_same fails when ANTHROPIC_API_KEY is set and real Supabase is reachable — the response includes exclude_senior:false which the test payload doesn't expect. Offline pytest (no creds) stays 355 passed.
 
 ## Closed (recent)
 <!-- - [x] description — commit hash -->
