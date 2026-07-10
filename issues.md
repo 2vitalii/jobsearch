@@ -43,6 +43,7 @@ this as a minor TODO — it directly drives monetisation and the user's trust in
 <!-- - [~] description — owner/agent -->
 - [~] feat: FILTER_DEBUG observability — additive env-flag instrumentation in sources.py + api/run.py (branch feat/filter-debug-instrumentation)
 - [~] feat: dynamic role/seniority filter — matches_role/blocked parametrized, exclude_senior field, 0010 migration file. Branch feat/dynamic-role-filter. Awaiting PM gate before PR.
+- [~] fix(sources)+feat(matches)+feat(results): freshness post-filter, real vacancy date, b2b sort tiebreak. Branch feat/freshness-date-b2b-rank. 3 commits (4a29342, 1b58c8d, d51f07d). Awaiting PM Gate 2 before PR. Migration 0011 must be applied by hand in Supabase SQL Editor.
   Known limitation: substring keyword match may miss synonyms (e.g. "support engineer" won't match "Customer Care Specialist"). Mitigated by score_fit/analyze as authoritative relevance gate + loose=True flag.
 
 ## Closed (recent)

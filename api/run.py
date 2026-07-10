@@ -155,6 +155,9 @@ def _write_match(supabase, user_id: str, job: Job, res, ats_report: str, cv_docx
         "job_company": job.company,
         "job_url": job.url,
         "job_region": job.region,
+        # Real vacancy posting date from the source (may be None when the source
+        # did not supply a date).  Stored as-is — do NOT substitute now()/created_at.
+        "job_posted_date": job.date_posted or None,
         "analysis": {
             "reason": res.reason,
             "jd_keywords": res.jd_keywords,

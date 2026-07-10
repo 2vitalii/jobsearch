@@ -93,6 +93,30 @@ function formatDate(isoString: string): string {
   }
 }
 
+/**
+ * Compute a human-readable relative age from an ISO date string.
+ * Returns strings like "3 days ago", "2 weeks ago", "1 month ago".
+ * Returns null if the string cannot be parsed.
+ */
+export function relativeAge(isoString: string | null | undefined): string | null {
+  if (!isoString) return null;
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return null;
+    const diffMs = Date.now() - d.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays < 1) return "today";
+    if (diffDays === 1) return "1 day ago";
+    if (diffDays < 14) return `${diffDays} days ago`;
+    const diffWeeks = Math.floor(diffDays / 7);
+    if (diffWeeks < 5) return diffWeeks === 1 ? "1 week ago" : `${diffWeeks} weeks ago`;
+    const diffMonths = Math.floor(diffDays / 30);
+    return diffMonths === 1 ? "1 month ago" : `${diffMonths} months ago`;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Verdict chip
 // ---------------------------------------------------------------------------
@@ -334,10 +358,24 @@ function MatchCard({ match }: MatchCardProps) {
           {/* recruiter_verdict chip — coloured by category */}
           {recruiterVerdict && <VerdictChip verdict={recruiterVerdict} />}
 
-          {/* created_at — mono, muted */}
+          {/* Vacancy posting date — real date from the source, NOT the run date.
+              If job_posted_date is present: show it + relative age.
+              If absent/null: show an explicit "Date unknown" marker.
+              The run date (created_at) is shown separately as "Found …" so it
+              is never mistaken for the vacancy's posting date. */}
+          <span className="ml-auto font-mono text-xs text-muted-foreground">
+            {match.job_posted_date
+              ? (() => {
+                  const age = relativeAge(match.job_posted_date);
+                  return age
+                    ? `${formatDate(match.job_posted_date)} · ${age}`
+                    : formatDate(match.job_posted_date);
+                })()
+              : "Date unknown"}
+          </span>
           {match.created_at && (
-            <span className="ml-auto font-mono text-xs text-muted-foreground">
-              {formatDate(match.created_at)}
+            <span className="font-mono text-xs text-muted-foreground/60">
+              Found {formatDate(match.created_at)}
             </span>
           )}
         </div>
@@ -586,15 +624,30 @@ export default function ResultsPage() {
           return r === regionFilter;
         });
 
+  // b2b rank helper: yes=0, maybe=1, no=2, missing/other=3 (lower = better)
+  function b2bRank(b2b: string | null | undefined): number {
+    if (b2b === "yes") return 0;
+    if (b2b === "maybe") return 1;
+    if (b2b === "no") return 2;
+    return 3;
+  }
+
   // Client-side sort
+  // Primary key: fit_score desc (for "fit") or created_at desc (for "newest").
+  // Secondary tiebreak (always): b2b_eligible asc (yes > maybe > no > unknown).
   const sorted = [...filtered].sort((a, b) => {
     if (sortKey === "fit") {
       const aScore = a.fit_score ?? -1;
       const bScore = b.fit_score ?? -1;
-      return bScore - aScore;
+      if (bScore !== aScore) return bScore - aScore;
+      // Equal fit_score — tiebreak by b2b rank
+      return b2bRank(a.b2b_eligible) - b2bRank(b.b2b_eligible);
     }
-    // "newest" — created_at desc
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    // "newest" — created_at desc, tiebreak by b2b rank
+    const timeDiff =
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    if (timeDiff !== 0) return timeDiff;
+    return b2bRank(a.b2b_eligible) - b2bRank(b.b2b_eligible);
   });
 
   // Regions present in current data (for filter options)
