@@ -43,6 +43,44 @@ def _filter_debug() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# JobSpy freshness post-filter
+# ---------------------------------------------------------------------------
+
+# Rows with an empty/unparseable date are dropped when the search window is at
+# or below this threshold.  In a wide window (e.g. 30 days) they are kept —
+# we can't date them precisely, but the window is broad enough that staleness
+# is less critical and dropping them would be too aggressive.
+STRICT_FRESH_WINDOW_H = 72
+
+
+def _jobspy_fresh(date_str: str | None, hours: int) -> bool:
+    """True if a JobSpy row is within the freshness window.
+
+    - Parseable date: delegates to filters.within_hours (do not duplicate).
+    - Empty/unparseable date: strict-drop when hours <= STRICT_FRESH_WINDOW_H
+      (narrow window where a missing date is likely stale); keep when hours is
+      wider (can't know, but the window is broad enough that it's acceptable).
+
+    NOTE: do NOT change filters.within_hours — its lenient empty→True behaviour
+    is intentional for RSS/ATS boards where missing dates are normal and benign.
+    This function is the JobSpy-only strict variant.
+    """
+    s = (date_str or "").strip()
+    parseable = False
+    if s:
+        try:
+            dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+            parseable = True
+        except Exception:
+            parseable = False
+    if not parseable:
+        # Empty or unparseable: strict-drop in narrow window, pass in wide window.
+        return hours > STRICT_FRESH_WINDOW_H
+    # Parseable date: reuse the existing within_hours check.
+    return filters.within_hours(s, hours)
+
+
+# ---------------------------------------------------------------------------
 # Scraper settings (not user request, not platform tuning — source plumbing)
 # ---------------------------------------------------------------------------
 JOBSPY_SITES = ["linkedin", "indeed", "google"]  # zip_recruiter=403, glassdoor сыпет ошибки
@@ -113,15 +151,18 @@ def collect_jobspy(params: SearchParams) -> list:
     jobs = []
     debug = _filter_debug()
 
+    # Always-on stale-drop counter (visible in normal runs, not just FILTER_DEBUG).
+    _stale_dropped: int = 0
+
     # Run-level grand totals (accumulated across all country/term combos).
     if debug:
         _total_raw: dict[str, int] = {}
         _total_kept: int = 0
         _total_dropped: dict[str, int] = {
-            "empty_title": 0, "blocked": 0, "not_role": 0, "not_remote": 0,
+            "empty_title": 0, "blocked": 0, "not_role": 0, "not_remote": 0, "not_fresh": 0,
         }
         _total_samples: dict[str, list[str]] = {
-            "empty_title": [], "blocked": [], "not_role": [], "not_remote": [],
+            "empty_title": [], "blocked": [], "not_role": [], "not_remote": [], "not_fresh": [],
         }
 
     for country in params.locations:
@@ -159,10 +200,10 @@ def collect_jobspy(params: SearchParams) -> list:
             if debug:
                 _raw_by_site: dict[str, int] = {}
                 _dropped: dict[str, int] = {
-                    "empty_title": 0, "blocked": 0, "not_role": 0, "not_remote": 0,
+                    "empty_title": 0, "blocked": 0, "not_role": 0, "not_remote": 0, "not_fresh": 0,
                 }
                 _samples: dict[str, list[str]] = {
-                    "empty_title": [], "blocked": [], "not_role": [], "not_remote": [],
+                    "empty_title": [], "blocked": [], "not_role": [], "not_remote": [], "not_fresh": [],
                 }
 
             for _, row in df.iterrows():
@@ -199,13 +240,28 @@ def collect_jobspy(params: SearchParams) -> list:
                             _total_samples[gate].append(title[:80])
                     continue
 
+                # --- Freshness post-filter (JobSpy-specific strict gate) ---
+                # rows.get("date_posted") may be empty (~16% of JobSpy rows).
+                # _jobspy_fresh strict-drops empty dates in narrow windows.
+                row_date = filters.s(row.get("date_posted"))
+                if not _jobspy_fresh(row_date, params.period_hours):
+                    _stale_dropped += 1
+                    if debug:
+                        _dropped["not_fresh"] += 1
+                        _total_dropped["not_fresh"] += 1
+                        if len(_samples["not_fresh"]) < 5:
+                            _samples["not_fresh"].append(title[:80])
+                        if len(_total_samples["not_fresh"]) < 5:
+                            _total_samples["not_fresh"].append(title[:80])
+                    continue
+
                 jobs.append(_mk_job(
                     source=filters.s(row.get("site")), title=title,
                     company=filters.s(row.get("company")),
                     location=filters.s(row.get("location")) or country,
                     region=filters.classify_region(row.get("location"), title, desc, country),
                     url=filters.s(row.get("job_url")),
-                    date_posted=filters.s(row.get("date_posted")), description=desc,
+                    date_posted=row_date, description=desc,
                 ))
                 cnt += 1
 
@@ -235,6 +291,12 @@ def collect_jobspy(params: SearchParams) -> list:
         for gate_name, examples in _total_samples.items():
             if examples:
                 print(f"    sample {gate_name}: {examples}")
+
+    # Always-on freshness counter (visible in every run, not only FILTER_DEBUG).
+    print(
+        f"  [freshness] JobSpy stale dropped "
+        f"(strict <= {STRICT_FRESH_WINDOW_H}h window): {_stale_dropped}"
+    )
 
     return jobs
 
