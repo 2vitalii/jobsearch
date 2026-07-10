@@ -93,6 +93,30 @@ function formatDate(isoString: string): string {
   }
 }
 
+/**
+ * Compute a human-readable relative age from an ISO date string.
+ * Returns strings like "3 days ago", "2 weeks ago", "1 month ago".
+ * Returns null if the string cannot be parsed.
+ */
+export function relativeAge(isoString: string | null | undefined): string | null {
+  if (!isoString) return null;
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return null;
+    const diffMs = Date.now() - d.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays < 1) return "today";
+    if (diffDays === 1) return "1 day ago";
+    if (diffDays < 14) return `${diffDays} days ago`;
+    const diffWeeks = Math.floor(diffDays / 7);
+    if (diffWeeks < 5) return diffWeeks === 1 ? "1 week ago" : `${diffWeeks} weeks ago`;
+    const diffMonths = Math.floor(diffDays / 30);
+    return diffMonths === 1 ? "1 month ago" : `${diffMonths} months ago`;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Verdict chip
 // ---------------------------------------------------------------------------
@@ -334,10 +358,24 @@ function MatchCard({ match }: MatchCardProps) {
           {/* recruiter_verdict chip — coloured by category */}
           {recruiterVerdict && <VerdictChip verdict={recruiterVerdict} />}
 
-          {/* created_at — mono, muted */}
+          {/* Vacancy posting date — real date from the source, NOT the run date.
+              If job_posted_date is present: show it + relative age.
+              If absent/null: show an explicit "Date unknown" marker.
+              The run date (created_at) is shown separately as "Found …" so it
+              is never mistaken for the vacancy's posting date. */}
+          <span className="ml-auto font-mono text-xs text-muted-foreground">
+            {match.job_posted_date
+              ? (() => {
+                  const age = relativeAge(match.job_posted_date);
+                  return age
+                    ? `${formatDate(match.job_posted_date)} · ${age}`
+                    : formatDate(match.job_posted_date);
+                })()
+              : "Date unknown"}
+          </span>
           {match.created_at && (
-            <span className="ml-auto font-mono text-xs text-muted-foreground">
-              {formatDate(match.created_at)}
+            <span className="font-mono text-xs text-muted-foreground/60">
+              Found {formatDate(match.created_at)}
             </span>
           )}
         </div>

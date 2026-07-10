@@ -38,6 +38,7 @@ class MatchDetail(BaseModel):
     status: str | None = None
     fit_score: int | None = None
     b2b_eligible: str | None = None
+    job_posted_date: str | None = None
     analysis: dict | None = None
     cover_letter: str | None = None
     ats_report: str | None = None
@@ -107,6 +108,7 @@ def get_match(
         status=row.get("status"),
         fit_score=row.get("fit_score"),
         b2b_eligible=row.get("b2b_eligible"),
+        job_posted_date=row.get("job_posted_date"),
         analysis=row.get("analysis"),
         cover_letter=row.get("cover_letter"),
         ats_report=row.get("ats_report"),

@@ -1,0 +1,33 @@
+-- =============================================================================
+-- 0011_matches_add_job_posted_date.sql — store the vacancy's own posting date
+-- on match rows so the frontend can display the real vacancy age, not the run date.
+--
+-- HOW TO APPLY
+--   *** APPLY BY HAND in Supabase SQL Editor ***
+--   Paste this whole file and run it.  Do NOT run it automatically — production
+--   migrations are applied manually per the project rules (see CLAUDE.md).
+--
+-- Idempotent: ADD COLUMN IF NOT EXISTS is safe to re-run.
+--
+-- WHY
+--   Previously matches only carried created_at (the moment the run completed) and
+--   the frontend showed that as the "date".  This masked the real vacancy age —
+--   a 2-week-old repost looked like it was found today.  Adding job_posted_date
+--   lets the frontend show the actual posting date supplied by the source (e.g.
+--   "2026-06-25") alongside a relative age ("3 weeks ago") and clearly label the
+--   run date separately as "Found <date>".
+--
+-- job_posted_date: nullable text
+--   Mirrors Job.date_posted — a raw string as delivered by the source (ISO date
+--   "2026-06-25", partial ISO, or similar).  Nullable because ~16% of JobSpy rows
+--   arrive with an empty date_posted; in those cases we store NULL rather than
+--   substituting now() / created_at (which would misrepresent the vacancy age).
+--   "text" matches the existing jobs.date_posted column type (0001_init_schema.sql).
+--
+-- RLS / grants
+--   No new policies or grants needed.  The column is covered by the existing
+--   SELECT grant and row-level security policy on public.matches (auth.uid() = user_id).
+-- =============================================================================
+
+alter table public.matches
+    add column if not exists job_posted_date text;
