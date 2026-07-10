@@ -109,6 +109,15 @@ VALID_JOBSPY_COUNTRIES = {
 }
 
 # ---------------------------------------------------------------------------
+# Query-combination cap (rate-limit / cost guard)
+# ---------------------------------------------------------------------------
+
+# Maximum number of (keyword, location) scrape_jobs calls issued per run.
+# Protects against rate-limit exhaustion and LLM-scoring cost explosions when
+# the user configures many roles × many locations.
+MAX_QUERY_COMBINATIONS = 18
+
+# ---------------------------------------------------------------------------
 # Location normalization constants + helper
 # ---------------------------------------------------------------------------
 
@@ -230,6 +239,17 @@ def collect_jobspy(params: SearchParams) -> list:
 
     # Normalize + expand locations before the loop (strip suffixes, expand EU/EMEA aliases).
     locations = _normalize_locations(params.locations)
+    keywords = params.keywords
+
+    # Always-on combination summary (not behind FILTER_DEBUG).
+    total_combos = len(keywords) * len(locations)
+    issued = min(total_combos, MAX_QUERY_COMBINATIONS)
+    skipped = total_combos - issued
+    print(
+        f"  [scrape] {len(keywords)} keywords × {len(locations)} locations"
+        f" = {total_combos} combos; issuing {issued} (cap {MAX_QUERY_COMBINATIONS})"
+        + (f"; skipped {skipped}" if skipped > 0 else "")
+    )
 
     # Always-on stale-drop counter (visible in normal runs, not just FILTER_DEBUG).
     _stale_dropped: int = 0
@@ -245,7 +265,13 @@ def collect_jobspy(params: SearchParams) -> list:
             "empty_title": [], "blocked": [], "not_role": [], "not_remote": [], "not_fresh": [],
         }
 
+    # Global counter of issued (keyword, location) pairs.
+    _combos_issued: int = 0
+    _cap_reached = False
+
     for country in locations:
+        if _cap_reached:
+            break
         is_region = country.strip().lower() not in VALID_JOBSPY_COUNTRIES
         if is_region:
             sites = [x for x in JOBSPY_SITES if x != "indeed"] or ["linkedin"]
@@ -253,7 +279,11 @@ def collect_jobspy(params: SearchParams) -> list:
         else:
             sites = JOBSPY_SITES
             ci = INDEED_COUNTRY.get(country, country.strip().lower())
-        for term in params.keywords:
+        for term in keywords:
+            if _combos_issued >= MAX_QUERY_COMBINATIONS:
+                _cap_reached = True
+                break
+            _combos_issued += 1
             try:
                 df = scrape_jobs(
                     site_name=sites,
