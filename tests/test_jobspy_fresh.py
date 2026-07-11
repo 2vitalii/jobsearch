@@ -117,3 +117,58 @@ def test_accepts_date_only_string():
     """Date-only string (YYYY-MM-DD) — today's date passes a wide window."""
     today = dt.date.today().isoformat()
     assert _jobspy_fresh(today, 24 * 30) is True
+
+
+# ---------------------------------------------------------------------------
+# Date-granularity: date-only (no time) treated as end-of-day (23:59:59 UTC)
+# ---------------------------------------------------------------------------
+
+def test_date_only_today_24h_window_keeps():
+    """Today's date-only string passes a 24h window (end-of-day treatment)."""
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()  # "YYYY-MM-DD"
+    assert _jobspy_fresh(today, 24) is True
+
+
+def test_date_only_yesterday_24h_window_keeps():
+    """Yesterday's date-only string passes a 24h window under end-of-day treatment.
+
+    Without end-of-day: yesterday 00:00 UTC is ~24–48h ago → dropped from 24h window.
+    With end-of-day: yesterday 23:59:59 UTC is at most ~24h+1s ago → kept.
+    This is the key regression this fix addresses.
+    """
+    yesterday = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=1)).isoformat()
+    assert _jobspy_fresh(yesterday, 24) is True
+
+
+def test_date_only_two_weeks_ago_24h_window_drops():
+    """A date-only string ~2 weeks ago is STILL dropped in a 24h window.
+
+    End-of-day of a 14-day-old date is still well outside 24h → remains False.
+    This confirms genuinely stale vacancies are not resurrected by the fix.
+    """
+    two_weeks_ago = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=14)).isoformat()
+    assert _jobspy_fresh(two_weeks_ago, 24) is False
+
+
+def test_date_only_old_hardcoded_24h_window_drops():
+    """A hardcoded old date (2025-02-12) is dropped in a 24h window (unchanged)."""
+    assert _jobspy_fresh("2025-02-12", 24) is False
+
+
+def test_date_only_wide_window_yesterday_keeps():
+    """Yesterday date-only passes a 30-day (720h) window — unchanged behavior."""
+    yesterday = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=1)).isoformat()
+    assert _jobspy_fresh(yesterday, 720) is True
+
+
+def test_date_only_wide_window_two_weeks_keeps():
+    """A 2-weeks-ago date-only passes a 30-day (720h) window — unchanged behavior."""
+    two_weeks_ago = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=14)).isoformat()
+    assert _jobspy_fresh(two_weeks_ago, 720) is True
+
+
+def test_datetime_with_time_component_unchanged():
+    """A datetime string with an explicit time component is used as-is (not end-of-day'd)."""
+    # 25h ago — should drop in a 24h window regardless of end-of-day adjustment
+    dt_str = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%S")
+    assert _jobspy_fresh(dt_str, 24) is False
