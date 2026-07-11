@@ -18,7 +18,7 @@ things stay missing — they are simply not written.
 from __future__ import annotations
 
 from .models import PlatformConfig
-from .scoring import LLMClient
+from .scoring import LLMClient, parse_json
 
 # Target shape — the exact section skeleton of master_cv.md.
 PARSE_SYSTEM = (
@@ -81,3 +81,61 @@ def make_short_profile(markdown: str, llm: LLMClient, config: PlatformConfig) ->
         max_tokens=512,
     )
     return out.strip()
+
+
+SUGGEST_ROLES_SYSTEM = (
+    "Extract 5-8 JOB TITLES / ROLES that this candidate can realistically search for based "
+    "on their ACTUAL work experience described in the CV.\n"
+    "\n"
+    "STRICT RULES:\n"
+    "- Return ONLY job titles / role names — e.g. 'Technical Support Engineer', "
+    "'Implementation Specialist', 'Project Coordinator'.\n"
+    "- EXPLICITLY EXCLUDE bare skills, tools, and technologies. Do NOT return items like "
+    "SQL, Azure, Python, MQTT, Git, Docker, Kubernetes, JavaScript, React, AWS — these are "
+    "skills, not roles, and pollute job searches.\n"
+    "- Only include roles grounded in the candidate's real experience. Do not invent titles "
+    "or seniority levels the person never held.\n"
+    "- Order by relevance: the strongest match (most experience evidence) first.\n"
+    "- Return a JSON array of strings and NOTHING else — no prose, no code fences, no labels.\n"
+    "\n"
+    "Example of correct output:\n"
+    '[\"Technical Support Engineer\", \"Integration Specialist\", \"Customer Success Manager\"]'
+)
+
+
+def suggest_search_roles(
+    cv_markdown: str,
+    llm: LLMClient,
+    config: PlatformConfig,
+) -> list[str]:
+    """Extract 5-8 job-title suggestions from the candidate's CV.
+
+    Uses the same injectable LLMClient seam as parse_cv/make_short_profile, so
+    tests can run with a fake and zero cost. Returns [] on any parse failure
+    (robust fallback). Honesty-first: roles come from real experience only."""
+    raw = llm.complete(
+        model=config.model_tailor,
+        system=SUGGEST_ROLES_SYSTEM,
+        messages=[{"role": "user", "content": f"MASTER CV:\n\n{cv_markdown}"}],
+        max_tokens=512,
+    )
+    try:
+        parsed = parse_json(raw)
+    except Exception:
+        # If the LLM returned a JSON array (not an object) parse_json may fail.
+        # Try a direct json.loads fallback for the array case.
+        import json
+        try:
+            parsed = json.loads(raw.strip())
+        except Exception:
+            return []
+
+    if not isinstance(parsed, list):
+        return []
+    roles: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            stripped = item.strip()
+            if stripped:
+                roles.append(stripped)
+    return roles[:8]

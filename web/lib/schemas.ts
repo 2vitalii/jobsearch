@@ -99,6 +99,12 @@ export const MatchListItemSchema = z
   .passthrough();
 export type MatchListItem = z.infer<typeof MatchListItemSchema>;
 
+// POST /cv/suggest-roles
+export const SuggestRolesResponseSchema = z.object({
+  roles: z.array(z.string()),
+});
+export type SuggestRolesResponse = z.infer<typeof SuggestRolesResponseSchema>;
+
 // GET /matches/{id} — detail (adds signed_cv_url)
 export const MatchDetailSchema = z
   .object({
