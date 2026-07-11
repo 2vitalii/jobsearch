@@ -51,7 +51,13 @@ def _filter_debug() -> bool:
 def _jobspy_fresh(date_str: str | None, hours: int) -> bool:
     """True if a JobSpy row is within the freshness window.
 
-    - Parseable date: delegates to filters.within_hours (do not duplicate).
+    - Parseable date WITH time component: delegates to filters.within_hours as-is.
+    - Parseable date WITHOUT time (YYYY-MM-DD, date-only): treated as END OF DAY
+      (23:59:59 UTC) before delegating.  Rationale: JobSpy/Indeed return plain
+      calendar dates with no time precision; parsing as midnight 00:00 would make
+      a "yesterday evening" posting look ~26h old and drop it from a 24h window.
+      Missing precision is resolved in the vacancy's favor — consistent with the
+      empty-date→keep decision below.
     - Empty / unparseable date: always returns True (keep).  Rationale: JobSpy
       passes hours_old to LinkedIn which already filtered freshness server-side;
       a missing date is an extraction gap, not evidence of staleness.  Dropping
@@ -64,6 +70,10 @@ def _jobspy_fresh(date_str: str | None, hours: int) -> bool:
     if s:
         try:
             dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+            # Date-only string: len==10, two "-", no "T" or ":" in the time portion.
+            # Treat as end-of-day so "yesterday" stays inside a 24h window.
+            if len(s) == 10 and s[4] == "-" and s[7] == "-" and "T" not in s and ":" not in s:
+                s = f"{s}T23:59:59"
             return filters.within_hours(s, hours)   # parseable → real window check
         except Exception:
             pass
@@ -74,7 +84,10 @@ def _jobspy_fresh(date_str: str | None, hours: int) -> bool:
 # Scraper settings (not user request, not platform tuning — source plumbing)
 # ---------------------------------------------------------------------------
 JOBSPY_SITES = ["linkedin", "indeed", "google"]  # zip_recruiter=403, glassdoor сыпет ошибки
-RESULTS_WANTED = 15        # на каждый источник/термин/страну (меньше = быстрее)
+# Indeed has no aggressive rate limiting (safe to pull more).
+# LinkedIn throttles around the ~10th page per IP and may 429 at higher limits.
+# PROXIES=None means all requests come from one IP — 429 log below makes throttling visible.
+RESULTS_WANTED = 40        # на каждый источник/термин/страну (raised from 15; LinkedIn ~29 typical)
 LINKEDIN_FETCH_DESC = True # тянуть полные описания LinkedIn (медленнее, больше лимитов)
 PROXIES = None             # ["user:pass@host:port", ...] — нужно для объёма на LinkedIn
 USE_REMOTE_BOARDS = True   # RemoteOK + We Work Remotely + Remotive (worldwide)
@@ -289,7 +302,12 @@ def collect_jobspy(params: SearchParams) -> list:
                     verbose=0,
                 )
             except Exception as e:
-                print(f"  [{country}/'{term}'] пропущен: {e}")
+                e_str = str(e)
+                e_low = e_str.lower()
+                if "429" in e_str or any(kw in e_low for kw in ("rate limit", "ratelimit", "too many requests")):
+                    print(f"  [rate-limit] source throttled (429) on {country}/'{term}': {e}")
+                else:
+                    print(f"  [{country}/'{term}'] пропущен: {e}")
                 continue
             if df is None or df.empty:
                 continue
