@@ -47,38 +47,27 @@ def _filter_debug() -> bool:
 # JobSpy freshness post-filter
 # ---------------------------------------------------------------------------
 
-# Rows with an empty/unparseable date are dropped when the search window is at
-# or below this threshold.  In a wide window (e.g. 30 days) they are kept —
-# we can't date them precisely, but the window is broad enough that staleness
-# is less critical and dropping them would be too aggressive.
-STRICT_FRESH_WINDOW_H = 72
-
 
 def _jobspy_fresh(date_str: str | None, hours: int) -> bool:
     """True if a JobSpy row is within the freshness window.
 
     - Parseable date: delegates to filters.within_hours (do not duplicate).
-    - Empty/unparseable date: strict-drop when hours <= STRICT_FRESH_WINDOW_H
-      (narrow window where a missing date is likely stale); keep when hours is
-      wider (can't know, but the window is broad enough that it's acceptable).
+    - Empty / unparseable date: always returns True (keep).  Rationale: JobSpy
+      passes hours_old to LinkedIn which already filtered freshness server-side;
+      a missing date is an extraction gap, not evidence of staleness.  Dropping
+      these rows was silently discarding fresh LinkedIn results.
 
     NOTE: do NOT change filters.within_hours — its lenient empty→True behaviour
     is intentional for RSS/ATS boards where missing dates are normal and benign.
-    This function is the JobSpy-only strict variant.
     """
     s = (date_str or "").strip()
-    parseable = False
     if s:
         try:
             dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
-            parseable = True
+            return filters.within_hours(s, hours)   # parseable → real window check
         except Exception:
-            parseable = False
-    if not parseable:
-        # Empty or unparseable: strict-drop in narrow window, pass in wide window.
-        return hours > STRICT_FRESH_WINDOW_H
-    # Parseable date: reuse the existing within_hours check.
-    return filters.within_hours(s, hours)
+            pass
+    return True   # empty / unparseable → keep (JobSpy hours_old already applied server-side)
 
 
 # ---------------------------------------------------------------------------
@@ -350,9 +339,11 @@ def collect_jobspy(params: SearchParams) -> list:
                             _total_samples[gate].append(title[:80])
                     continue
 
-                # --- Freshness post-filter (JobSpy-specific strict gate) ---
-                # rows.get("date_posted") may be empty (~16% of JobSpy rows).
-                # _jobspy_fresh strict-drops empty dates in narrow windows.
+                # --- Freshness post-filter (JobSpy-specific gate) ---
+                # rows.get("date_posted") may be empty (~16% of JobSpy rows —
+                # fresh LinkedIn results without a machine-readable date tag).
+                # _jobspy_fresh KEEPS empty/unparseable dates and drops only a
+                # date that is present AND older than the window.
                 row_date = filters.s(row.get("date_posted"))
                 if not _jobspy_fresh(row_date, params.period_hours):
                     _stale_dropped += 1
@@ -405,7 +396,7 @@ def collect_jobspy(params: SearchParams) -> list:
     # Always-on freshness counter (visible in every run, not only FILTER_DEBUG).
     print(
         f"  [freshness] JobSpy stale dropped "
-        f"(strict <= {STRICT_FRESH_WINDOW_H}h window): {_stale_dropped}"
+        f"(date present & older than window): {_stale_dropped}"
     )
 
     return jobs

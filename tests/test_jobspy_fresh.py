@@ -1,10 +1,11 @@
 """Offline unit tests for the _jobspy_fresh helper in jobsearch/sources.py.
 
-Four key cases from the audit spec:
-  1. Empty date + narrow window (<= STRICT_FRESH_WINDOW_H) → False (strict-drop)
-  2. Empty date + wide window (> STRICT_FRESH_WINDOW_H) → True  (keep)
-  3. Real old date + narrow window (24h) → False (via within_hours)
-  4. Real fresh date + narrow window (24h) → True  (via within_hours)
+New behavior (post fix/sources empty-date):
+  - Empty / None / unparseable date → always True (keep), regardless of window.
+    Rationale: JobSpy passes hours_old to LinkedIn server-side; a missing date
+    is an extraction gap, not staleness evidence.
+  - Parseable date older than the window → False (dropped, unchanged).
+  - Parseable date within the window → True (kept, unchanged).
 
 No network, no Supabase, no LLM.
 """
@@ -12,10 +13,11 @@ No network, no Supabase, no LLM.
 from __future__ import annotations
 
 import datetime as dt
+from datetime import timezone
 
 import pytest
 
-from jobsearch.sources import STRICT_FRESH_WINDOW_H, _jobspy_fresh
+from jobsearch.sources import _jobspy_fresh
 
 
 # ---------------------------------------------------------------------------
@@ -24,44 +26,56 @@ from jobsearch.sources import STRICT_FRESH_WINDOW_H, _jobspy_fresh
 
 def _iso_hours_ago(hours: float) -> str:
     """Return an ISO date string representing 'hours' ago from now."""
-    d = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+    d = dt.datetime.now(timezone.utc) - dt.timedelta(hours=hours)
     return d.isoformat()
 
 
 # ---------------------------------------------------------------------------
-# Empty / unparseable date
+# Empty / None / whitespace → always keep (True), any window
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("date_str", ["", None, "   ", "not-a-date", "2 weeks ago"])
-def test_empty_date_narrow_window_drops(date_str):
-    """Empty / unparseable date in a narrow (<= STRICT_FRESH_WINDOW_H) window → False."""
-    assert _jobspy_fresh(date_str, STRICT_FRESH_WINDOW_H) is False
+def test_empty_string_narrow_window_keeps():
+    """Empty string passes a narrow 24h window (NEW: keep, not drop)."""
+    assert _jobspy_fresh("", 24) is True
 
 
-@pytest.mark.parametrize("date_str", ["", None, "   ", "not-a-date"])
-def test_empty_date_wide_window_keeps(date_str):
-    """Empty / unparseable date in a wide (> STRICT_FRESH_WINDOW_H) window → True."""
-    assert _jobspy_fresh(date_str, STRICT_FRESH_WINDOW_H + 1) is True
+def test_whitespace_string_narrow_window_keeps():
+    """Whitespace-only string passes a narrow 24h window."""
+    assert _jobspy_fresh("   ", 24) is True
 
 
-def test_empty_date_exactly_at_threshold_drops():
-    """At exactly STRICT_FRESH_WINDOW_H (not strictly greater) → False."""
-    assert _jobspy_fresh("", STRICT_FRESH_WINDOW_H) is False
+def test_none_narrow_window_keeps():
+    """None passes a narrow 24h window."""
+    assert _jobspy_fresh(None, 24) is True
 
 
-def test_empty_date_one_over_threshold_keeps():
-    """One hour over STRICT_FRESH_WINDOW_H → True."""
-    assert _jobspy_fresh("", STRICT_FRESH_WINDOW_H + 1) is True
+def test_empty_date_wide_window_keeps():
+    """Empty date in a wide window (720h) → True (unchanged from old behavior)."""
+    assert _jobspy_fresh("", 720) is True
+
+
+def test_none_wide_window_keeps():
+    """None in a wide window → True."""
+    assert _jobspy_fresh(None, 720) is True
 
 
 # ---------------------------------------------------------------------------
-# Parseable date — delegates to within_hours
+# Unparseable non-empty strings → keep (True)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("date_str", ["2 hours ago", "not-a-date", "yesterday", "2 weeks ago"])
+def test_unparseable_string_keeps(date_str):
+    """Unparseable non-empty strings are kept (JobSpy hours_old already filtered)."""
+    assert _jobspy_fresh(date_str, 24) is True
+
+
+# ---------------------------------------------------------------------------
+# Parseable date — delegates to within_hours (unchanged behavior)
 # ---------------------------------------------------------------------------
 
 def test_old_date_narrow_window_drops():
-    """A date 2 weeks ago fails a 24h window."""
-    old = _iso_hours_ago(24 * 14)  # 2 weeks ago
-    assert _jobspy_fresh(old, 24) is False
+    """A date-only string 2025-02-12 fails a 24h window — stays False."""
+    assert _jobspy_fresh("2025-02-12", 24) is False
 
 
 def test_fresh_date_narrow_window_keeps():
@@ -94,7 +108,7 @@ def test_boundary_date_just_outside_window():
 
 def test_accepts_iso_with_z_suffix():
     """ISO string with Z suffix (UTC) is parsed correctly."""
-    fresh = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)
+    fresh = dt.datetime.now(timezone.utc) - dt.timedelta(hours=1)
     iso_z = fresh.strftime("%Y-%m-%dT%H:%M:%SZ")
     assert _jobspy_fresh(iso_z, 24) is True
 
