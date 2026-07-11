@@ -83,7 +83,10 @@ def _jobspy_fresh(date_str: str | None, hours: int) -> bool:
 # Scraper settings (not user request, not platform tuning — source plumbing)
 # ---------------------------------------------------------------------------
 JOBSPY_SITES = ["linkedin", "indeed", "google"]  # zip_recruiter=403, glassdoor сыпет ошибки
-RESULTS_WANTED = 15        # на каждый источник/термин/страну (меньше = быстрее)
+# Indeed has no aggressive rate limiting (safe to pull more).
+# LinkedIn throttles around the ~10th page per IP and may 429 at higher limits.
+# PROXIES=None means all requests come from one IP — 429 log below makes throttling visible.
+RESULTS_WANTED = 40        # на каждый источник/термин/страну (raised from 15; LinkedIn ~29 typical)
 LINKEDIN_FETCH_DESC = True # тянуть полные описания LinkedIn (медленнее, больше лимитов)
 PROXIES = None             # ["user:pass@host:port", ...] — нужно для объёма на LinkedIn
 USE_REMOTE_BOARDS = True   # RemoteOK + We Work Remotely + Remotive (worldwide)
@@ -189,7 +192,12 @@ def collect_jobspy(params: SearchParams) -> list:
                     verbose=0,
                 )
             except Exception as e:
-                print(f"  [{country}/'{term}'] пропущен: {e}")
+                e_str = str(e)
+                e_low = e_str.lower()
+                if "429" in e_str or any(kw in e_low for kw in ("rate limit", "ratelimit", "too many requests")):
+                    print(f"  [rate-limit] source throttled (429) on {country}/'{term}': {e}")
+                else:
+                    print(f"  [{country}/'{term}'] пропущен: {e}")
                 continue
             if df is None or df.empty:
                 continue
