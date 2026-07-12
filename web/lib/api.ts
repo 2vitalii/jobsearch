@@ -15,6 +15,8 @@ import {
   type MatchListItem,
   MatchDetailSchema,
   type MatchDetail,
+  GenerateStartedSchema,
+  type GenerateStarted,
   SuggestRolesResponseSchema,
   type SuggestRolesResponse,
 } from "@/lib/schemas";
@@ -200,6 +202,45 @@ export function getMatches(): Promise<MatchListItem[]> {
 /** GET /matches/{id} — single match with signed_cv_url. */
 export function getMatch(id: string): Promise<MatchDetail> {
   return apiFetch(`/matches/${id}`, MatchDetailSchema);
+}
+
+/**
+ * Error thrown when package generation is already in progress (HTTP 409).
+ * Callers can detect this via `err instanceof GenerateConflictError`.
+ */
+export class GenerateConflictError extends Error {
+  readonly code = "GENERATE_ACTIVE" as const;
+  constructor() {
+    super("Package generation is already in progress for this match");
+    this.name = "GenerateConflictError";
+  }
+}
+
+/**
+ * POST /matches/{id}/generate — start async package generation for a match.
+ * Throws GenerateConflictError on 409 (generation already in progress).
+ * Returns GenerateStarted (match_id + generation_status:'generating') on 202.
+ */
+export async function generateMatchPackage(id: string): Promise<GenerateStarted> {
+  const token = await getAccessToken();
+  const res = await fetch(`${API_BASE}/matches/${id}/generate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeader(token),
+    },
+  });
+  if (res.status === 409) {
+    throw new GenerateConflictError();
+  }
+  if (!res.ok) {
+    throw new Error(`Failed to start package generation (${res.status})`);
+  }
+  return validate(
+    `/matches/${id}/generate`,
+    GenerateStartedSchema,
+    (await res.json()) as unknown,
+  );
 }
 
 /** POST /cv/suggest-roles — extract 5-8 searchable job titles from the user's CV. */

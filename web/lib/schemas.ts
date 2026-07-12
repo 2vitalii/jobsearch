@@ -95,6 +95,10 @@ export const MatchListItemSchema = z
     job_url: z.string().nullable().optional(),
     job_region: z.string().nullable().optional(),
     job: MatchJobSchema.nullable().optional(),
+    generation_status: z
+      .enum(["none", "generating", "done", "failed"])
+      .nullable()
+      .optional(),
   })
   .passthrough();
 export type MatchListItem = z.infer<typeof MatchListItemSchema>;
@@ -104,6 +108,13 @@ export const SuggestRolesResponseSchema = z.object({
   roles: z.array(z.string()),
 });
 export type SuggestRolesResponse = z.infer<typeof SuggestRolesResponseSchema>;
+
+// POST /matches/{id}/generate -> 202
+export const GenerateStartedSchema = z.object({
+  match_id: z.string(),
+  generation_status: z.string(),
+});
+export type GenerateStarted = z.infer<typeof GenerateStartedSchema>;
 
 // GET /matches/{id} — detail (adds signed_cv_url)
 export const MatchDetailSchema = z
@@ -119,6 +130,10 @@ export const MatchDetailSchema = z
     ats_report: z.string().nullable().optional(),
     job: MatchJobSchema.nullable().optional(),
     signed_cv_url: z.string().nullable().optional(),
+    generation_status: z
+      .enum(["none", "generating", "done", "failed"])
+      .nullable()
+      .optional(),
   })
   .passthrough();
 export type MatchDetail = z.infer<typeof MatchDetailSchema>;

@@ -1,18 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowUpRight,
+  ChevronDown,
+  ChevronUp,
   Download,
   FileText,
+  Loader2,
+  Package,
+  RefreshCw,
   Search,
   SlidersHorizontal,
 } from "lucide-react";
-import { getMatches, getMatch } from "@/lib/api";
-import type { MatchListItem } from "@/lib/schemas";
+import {
+  generateMatchPackage,
+  GenerateConflictError,
+  getMatches,
+  getMatch,
+} from "@/lib/api";
+import type { MatchListItem, MatchDetail } from "@/lib/schemas";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +41,24 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Visual boundary for the fit score split. Cards with fit_score >= LOW_FIT_BOUNDARY
+ * are shown expanded; cards below are grouped under a collapsible "low-fit" section.
+ * This is a frontend display constant — not wired to billing or thresholds.
+ */
+const LOW_FIT_BOUNDARY = 45;
+
+/**
+ * Placeholder free-package quota (NOT wired to billing/Lemon Squeezy).
+ * Displayed as a simple counter: FREE_PACKAGES minus count of 'done' matches.
+ * Replace with real quota from the backend when billing is implemented.
+ */
+const FREE_PACKAGES = 20;
 
 // ---------------------------------------------------------------------------
 // STEP 5 — recruiter_verdict parse helper (pure, exported for tests)
@@ -179,20 +207,123 @@ function KeywordChip({ word, variant }: KeywordChipProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Generate package button — driven by generation_status
+// ---------------------------------------------------------------------------
+
+interface GenerateButtonProps {
+  matchId: string;
+  initialStatus: string | null | undefined;
+  /** Called when generation reaches 'done' so the card can refresh documents. */
+  onDone: (detail: MatchDetail) => void;
+}
+
+function GenerateButton({ matchId, initialStatus, onDone }: GenerateButtonProps) {
+  const [status, setStatus] = useState<string>(initialStatus ?? "none");
+  const [isStarting, setIsStarting] = useState(false);
+  const queryClient = useQueryClient();
+
+  // Poll GET /matches/{id} while generating.
+  const { data: polledDetail } = useQuery({
+    queryKey: ["match", matchId, "poll"],
+    queryFn: () => getMatch(matchId),
+    enabled: status === "generating",
+    refetchInterval: (query) => {
+      const gs = query.state.data?.generation_status;
+      if (gs === "done" || gs === "failed") return false;
+      return 2500;
+    },
+    retry: false,
+    staleTime: 0,
+  });
+
+  // Track previous poll status to detect transitions.
+  const prevPollStatus = useRef<string | null>(null);
+
+  useEffect(() => {
+    const gs = polledDetail?.generation_status;
+    if (!gs || gs === prevPollStatus.current) return;
+    prevPollStatus.current = gs;
+    setStatus(gs);
+    if (gs === "done") {
+      // Invalidate the match list so the list item updates generation_status.
+      void queryClient.invalidateQueries({ queryKey: ["matches"] });
+      onDone(polledDetail);
+    }
+    if (gs === "failed") {
+      toast.error("Package generation failed. Try again.");
+    }
+  }, [polledDetail, onDone, queryClient]);
+
+  async function handleGenerate() {
+    setIsStarting(true);
+    try {
+      await generateMatchPackage(matchId);
+      setStatus("generating");
+    } catch (err) {
+      if (err instanceof GenerateConflictError) {
+        toast.error("Generation is already in progress for this match.");
+        setStatus("generating");
+      } else {
+        toast.error(
+          err instanceof Error ? err.message : "Couldn't start package generation.",
+        );
+      }
+    } finally {
+      setIsStarting(false);
+    }
+  }
+
+  if (status === "none" || status === "failed") {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void handleGenerate()}
+        disabled={isStarting}
+        className="gap-1.5 text-xs"
+      >
+        {isStarting ? (
+          <Loader2 className="size-3 animate-spin" />
+        ) : status === "failed" ? (
+          <RefreshCw className="size-3" />
+        ) : (
+          <Package className="size-3" />
+        )}
+        {status === "failed" ? "Retry generation" : "Generate package"}
+      </Button>
+    );
+  }
+
+  if (status === "generating") {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3 animate-spin" />
+        Generating…
+      </span>
+    );
+  }
+
+  // status === "done" — show nothing here; documents section will show links.
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // CV download — fetches signed_cv_url on demand
 // ---------------------------------------------------------------------------
 
 interface CvDownloadProps {
   matchId: string;
+  /** Pre-loaded detail from polling; avoids a redundant fetch if already available. */
+  preloadedDetail?: MatchDetail | null;
 }
 
-function CvDownload({ matchId }: CvDownloadProps) {
+function CvDownload({ matchId, preloadedDetail }: CvDownloadProps) {
   const [triggered, setTriggered] = useState(false);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["match", matchId],
     queryFn: () => getMatch(matchId),
-    enabled: triggered,
+    enabled: triggered && !preloadedDetail,
     staleTime: 30_000, // signed URL is short-lived; re-fetch if stale
     retry: false,
   });
@@ -205,9 +336,10 @@ function CvDownload({ matchId }: CvDownloadProps) {
     }
   }, [isError, error]);
 
-  const signedUrl = safeHttpUrl(data?.signed_cv_url);
+  const detail = preloadedDetail ?? data;
+  const signedUrl = safeHttpUrl(detail?.signed_cv_url);
 
-  if (!triggered) {
+  if (!triggered && !preloadedDetail) {
     return (
       <Button
         variant="outline"
@@ -221,7 +353,7 @@ function CvDownload({ matchId }: CvDownloadProps) {
     );
   }
 
-  if (isLoading) {
+  if (isLoading && !preloadedDetail) {
     return <Skeleton className="h-8 w-28" />;
   }
 
@@ -269,8 +401,16 @@ function MatchCard({ match }: MatchCardProps) {
   const atsPresent = analysis?.ats_present ?? [];
   const atsMissing = analysis?.ats_missing ?? [];
   const gaps = analysis?.gaps;
-  const coverLetter = match.cover_letter;
-  const atsReport = match.ats_report;
+
+  // Generation status — drives the Generate button state.
+  const genStatus = match.generation_status;
+
+  // When generation completes, we receive the full MatchDetail from polling.
+  // Store it locally so documents appear immediately without re-fetching.
+  const [doneDetail, setDoneDetail] = useState<MatchDetail | null>(null);
+
+  const coverLetter = doneDetail?.cover_letter ?? match.cover_letter;
+  const atsReport = doneDetail?.ats_report ?? match.ats_report;
 
   // Determine fit score colour (optional visual accent, no fabrication)
   function fitScoreClass(score: number): string {
@@ -286,7 +426,7 @@ function MatchCard({ match }: MatchCardProps) {
     !!recruiterVerdict ||
     !!coverLetter ||
     !!atsReport ||
-    true; // CV download is always available (it attempts fetch)
+    true; // Generate button / CV download is always available
 
   return (
     <div className="rounded-[--radius] border border-border bg-card">
@@ -471,7 +611,16 @@ function MatchCard({ match }: MatchCardProps) {
                       DOCUMENTS
                     </p>
 
-                    {/* Cover letter */}
+                    {/* Generate package button — driven by generation_status */}
+                    {genStatus !== "done" && doneDetail === null && (
+                      <GenerateButton
+                        matchId={match.id}
+                        initialStatus={genStatus}
+                        onDone={setDoneDetail}
+                      />
+                    )}
+
+                    {/* Cover letter — shown once generation is done */}
                     {coverLetter && (
                       <div className="space-y-1">
                         <div className="flex items-center gap-1.5">
@@ -501,8 +650,13 @@ function MatchCard({ match }: MatchCardProps) {
                       </div>
                     )}
 
-                    {/* CV download — fetches signed_cv_url on demand */}
-                    <CvDownload matchId={match.id} />
+                    {/* CV download — shown when generation is done */}
+                    {(genStatus === "done" || doneDetail !== null) && (
+                      <CvDownload
+                        matchId={match.id}
+                        preloadedDetail={doneDetail}
+                      />
+                    )}
                   </div>
                 </div>
               </AccordionContent>
@@ -587,6 +741,48 @@ function EmptyFiltered({ onClear }: EmptyFilteredProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Low-fit collapsible section
+// ---------------------------------------------------------------------------
+
+interface LowFitSectionProps {
+  matches: MatchListItem[];
+}
+
+function LowFitSection({ matches }: LowFitSectionProps) {
+  const [open, setOpen] = useState(false);
+
+  if (matches.length === 0) return null;
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 rounded-[--radius] border border-border bg-card px-4 py-2.5 text-left text-xs text-muted-foreground hover:text-foreground"
+      >
+        {open ? (
+          <ChevronUp className="size-3.5 shrink-0" />
+        ) : (
+          <ChevronDown className="size-3.5 shrink-0" />
+        )}
+        <span>
+          {open
+            ? `Hide ${matches.length} low-fit match${matches.length !== 1 ? "es" : ""}`
+            : `${matches.length} more low-fit match${matches.length !== 1 ? "es" : ""} (score < ${LOW_FIT_BOUNDARY})`}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-3">
+          {matches.map((match) => (
+            <MatchCard key={match.id} match={match} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -650,6 +846,16 @@ export default function ResultsPage() {
     return b2bRank(a.b2b_eligible) - b2bRank(b.b2b_eligible);
   });
 
+  // Split into high-fit (>= LOW_FIT_BOUNDARY) and low-fit (< LOW_FIT_BOUNDARY).
+  const highFit = sorted.filter((m) => (m.fit_score ?? 0) >= LOW_FIT_BOUNDARY);
+  const lowFit = sorted.filter((m) => (m.fit_score ?? 0) < LOW_FIT_BOUNDARY);
+
+  // Remaining packages counter: FREE_PACKAGES minus matches with generation_status==='done'.
+  // NOT wired to billing — this is a simple placeholder for the UI.
+  // Replace with a real quota endpoint when billing (Lemon Squeezy) is implemented.
+  const doneCount = matches.filter((m) => m.generation_status === "done").length;
+  const remainingPackages = Math.max(0, FREE_PACKAGES - doneCount);
+
   // Regions present in current data (for filter options)
   const regionsInData = Array.from(
     new Set(matches.map((m) => m.job?.region ?? m.job_region).filter(Boolean)),
@@ -672,16 +878,24 @@ export default function ResultsPage() {
             </p>
           )}
         </div>
-        <Link
-          href="/search"
-          className={cn(
-            buttonVariants({ variant: "outline", size: "sm" }),
-            "shrink-0",
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Remaining packages counter — placeholder, NOT wired to billing */}
+          {matches.length > 0 && (
+            <span className="font-mono text-xs text-muted-foreground" title="Free package quota (placeholder — not wired to billing)">
+              <Package className="mb-0.5 mr-0.5 inline size-3" />
+              {remainingPackages} left
+            </span>
           )}
-        >
-          <Search className="size-3.5" />
-          New search
-        </Link>
+          <Link
+            href="/search"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+            )}
+          >
+            <Search className="size-3.5" />
+            New search
+          </Link>
+        </div>
       </div>
 
       {/* Controls row — only when there are matches */}
@@ -736,9 +950,13 @@ export default function ResultsPage() {
         <EmptyFiltered onClear={() => setRegionFilter("ALL")} />
       ) : (
         <div className="space-y-3">
-          {sorted.map((match) => (
+          {/* High-fit cards (>= LOW_FIT_BOUNDARY) — shown expanded */}
+          {highFit.map((match) => (
             <MatchCard key={match.id} match={match} />
           ))}
+
+          {/* Low-fit section (< LOW_FIT_BOUNDARY) — collapsible */}
+          <LowFitSection matches={lowFit} />
         </div>
       )}
     </main>

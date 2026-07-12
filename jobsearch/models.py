@@ -52,7 +52,7 @@ class PlatformConfig:
     model_score: str = "claude-haiku-4-5-20251001"
     model_tailor: str = "claude-sonnet-4-6"
     min_fit: int = 45
-    pre_min_fit: int = 35
+    pre_min_fit: int = 20
     max_jobs: int = 250
     process_regions: frozenset[str] = frozenset({"WORLDWIDE", "EUROPE", "UNKNOWN"})
 
@@ -77,9 +77,54 @@ class PreScore:
 
 
 @dataclass
+class Assessment:
+    """Full Sonnet assessment result — ONLY scoring/analysis fields.
+    Structurally cannot contain tailored_summary/tailored_skills/cover_letter,
+    so honesty invariant #1 is enforced at the type level."""
+    fit_score: int
+    b2b: str
+    reason: str
+    jd_keywords: list
+    ats_present: list
+    ats_missing: list
+    gaps: str
+    recruiter_verdict: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Assessment":
+        return cls(
+            fit_score=int(d.get("fit_score", 0) or 0),
+            b2b=d.get("b2b_eligible", ""),
+            reason=d.get("reason", ""),
+            jd_keywords=d.get("jd_keywords", []) or [],
+            ats_present=d.get("ats_present", []) or [],
+            ats_missing=d.get("ats_missing", []) or [],
+            gaps=d.get("gaps", ""),
+            recruiter_verdict=d.get("recruiter_verdict", ""),
+        )
+
+
+@dataclass
+class Generation:
+    """Sonnet generation result — ONLY tailored CV/letter fields.
+    Structurally cannot contain fit_score or assessment fields."""
+    tailored_summary: str
+    tailored_skills: list
+    cover_letter: str
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Generation":
+        return cls(
+            tailored_summary=d.get("tailored_summary", ""),
+            tailored_skills=d.get("tailored_skills", []) or [],
+            cover_letter=d.get("cover_letter", ""),
+        )
+
+
+@dataclass
 class MatchResult:
     """Full Sonnet tailoring result (mirrors the JSON schema from the original
-    pipeline SYSTEM prompt)."""
+    pipeline SYSTEM prompt). Used as the combined render input for build_package."""
     fit_score: int
     b2b: str
     reason: str
@@ -106,6 +151,25 @@ class MatchResult:
             gaps=d.get("gaps", ""),
             recruiter_verdict=d.get("recruiter_verdict", ""),
             cover_letter=d.get("cover_letter", ""),
+        )
+
+    @classmethod
+    def from_assessment_and_generation(cls, a: "Assessment", g: "Generation") -> "MatchResult":
+        """Build a MatchResult from a separate Assessment + Generation pair.
+        This allows render.build_package to remain unchanged while the upstream
+        pipeline uses the split assess/generate functions."""
+        return cls(
+            fit_score=a.fit_score,
+            b2b=a.b2b,
+            reason=a.reason,
+            jd_keywords=a.jd_keywords,
+            ats_present=a.ats_present,
+            ats_missing=a.ats_missing,
+            tailored_summary=g.tailored_summary,
+            tailored_skills=g.tailored_skills,
+            gaps=a.gaps,
+            recruiter_verdict=a.recruiter_verdict,
+            cover_letter=g.cover_letter,
         )
 
 
