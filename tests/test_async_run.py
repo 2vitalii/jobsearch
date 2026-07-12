@@ -13,6 +13,8 @@ Scenarios covered:
   6. Background loop on exception → sets status='failed' + error without crash.
   7. Startup lifespan cleanup → orphaned 'running' runs are set to 'failed'.
   8. Response uses 'processed' field name (not the old 'queued').
+  9. Assess-only loop: generated = assessments saved (not packages); no min_fit drop.
+ 10. run_id first-run: ON CONFLICT DO NOTHING — repeat assess does not overwrite.
 
 The in-memory FakeRunsDB is the heart of the fake: it acts as a single dict
 keyed by run_id and is injected everywhere via dependency_overrides.
@@ -65,22 +67,30 @@ FAKE_CV_MD = (
 )
 FAKE_SHORT_PROFILE = "Support engineer, 2 years, SQL/REST."
 
-RICH = {
+# Assessment-only payload (no tailored_summary/skills/cover_letter).
+ASSESS_PAYLOAD = {
     "fit_score": 88,
     "b2b_eligible": "yes",
     "reason": "strong match",
     "jd_keywords": ["sql", "rest api", "support"],
     "ats_present": ["sql", "support"],
     "ats_missing": [],
-    "tailored_summary": "Support engineer aligned to the role.",
-    "tailored_skills": ["Technical Support: SQL, REST APIs"],
     "gaps": "none",
     "recruiter_verdict": "shortlist",
+}
+
+# Full payload for backward-compat analyze() / FakeLLM (used in tests that need
+# both assess + generate, e.g. write_match_receives_run_id check).
+RICH = {
+    **ASSESS_PAYLOAD,
+    "tailored_summary": "Support engineer aligned to the role.",
+    "tailored_skills": ["Technical Support: SQL, REST APIs"],
     "cover_letter": "Dear team, I am a strong fit.",
 }
 
 
 class FakeLLM:
+    """Returns assess payload for assess() call; also works for score_fit Haiku call."""
     def complete(self, *, model, system, messages, max_tokens) -> str:
         return json.dumps(RICH)
 
@@ -177,14 +187,78 @@ class FakeJobStore:
 
 
 # ---------------------------------------------------------------------------
-# Fake Supabase client
+# Fake Supabase client (handles both 'runs' and 'matches' tables)
 # ---------------------------------------------------------------------------
 
-class _FakeQueryBuilder:
-    """Minimal fluent builder delegating to FakeRunsDB."""
+class _FakeMatchesDB:
+    """In-memory store for the ``matches`` table with ON CONFLICT DO NOTHING support."""
 
-    def __init__(self, db: FakeRunsDB, table: str):
-        self._db = db
+    def __init__(self):
+        self._lock = threading.Lock()
+        # Key: (user_id, job_id)
+        self._rows: dict[tuple[str, str], dict] = {}
+
+    def upsert_ignore_dup(self, row: dict) -> dict | None:
+        """Insert if not exists; return None (DO NOTHING) if conflict."""
+        key = (row.get("user_id", ""), row.get("job_id", ""))
+        with self._lock:
+            if key in self._rows:
+                return None  # ON CONFLICT DO NOTHING
+            self._rows[key] = dict(row)
+            return dict(row)
+
+    def upsert_overwrite(self, row: dict) -> dict:
+        """Upsert with overwrite (for generate updates)."""
+        key = (row.get("user_id", ""), row.get("job_id", ""))
+        with self._lock:
+            existing = self._rows.get(key, {})
+            existing.update(row)
+            self._rows[key] = existing
+            return dict(existing)
+
+    def select_all(self) -> list[dict]:
+        with self._lock:
+            return [dict(r) for r in self._rows.values()]
+
+    def clear(self) -> None:
+        with self._lock:
+            self._rows.clear()
+
+
+class _FakeJobsDB:
+    """In-memory store for the shared ``jobs`` table."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        # Key: dedup_key
+        self._rows: dict[str, dict] = {}
+
+    def upsert(self, row: dict) -> dict:
+        key = row.get("dedup_key", str(uuid.uuid4()))
+        with self._lock:
+            if key not in self._rows:
+                row.setdefault("id", str(uuid.uuid4()))
+                self._rows[key] = dict(row)
+            return dict(self._rows[key])
+
+    def select_by_dedup_key(self, dedup_key: str) -> dict | None:
+        with self._lock:
+            return dict(self._rows[dedup_key]) if dedup_key in self._rows else None
+
+
+class _FakeQueryBuilder:
+    """Minimal fluent builder delegating to FakeRunsDB, FakeMatchesDB, or FakeJobsDB."""
+
+    def __init__(
+        self,
+        runs_db: FakeRunsDB,
+        matches_db: "_FakeMatchesDB",
+        jobs_db: "_FakeJobsDB",
+        table: str,
+    ):
+        self._runs_db = runs_db
+        self._matches_db = matches_db
+        self._jobs_db = jobs_db
         self._table = table
         self._op: str | None = None
         self._data: dict | None = None
@@ -192,6 +266,7 @@ class _FakeQueryBuilder:
         self._order_col: str | None = None
         self._order_desc: bool = False
         self._limit_val: int | None = None
+        self._ignore_duplicates: bool = False
 
     def insert(self, data: dict):
         self._op = "insert"
@@ -207,9 +282,10 @@ class _FakeQueryBuilder:
         self._op = "select"
         return self
 
-    def upsert(self, data: dict, **_kw):
-        self._op = "insert"
+    def upsert(self, data: dict, on_conflict: str = "", ignore_duplicates: bool = False, **_kw):
+        self._op = "upsert"
         self._data = data
+        self._ignore_duplicates = ignore_duplicates
         return self
 
     def eq(self, col: str, val: Any):
@@ -231,50 +307,88 @@ class _FakeQueryBuilder:
 
         result = _Result()
 
-        if self._table != "runs":
-            result.data = []
-            return result
+        if self._table == "runs":
+            if self._op in ("insert", "upsert"):
+                row = self._runs_db.insert(self._data or {})
+                result.data = [row]
+            elif self._op == "update":
+                result.data = self._runs_db.update_matching(self._filters, self._data or {})
+            elif self._op == "select":
+                rows = self._runs_db.select_matching(self._filters)
+                if self._order_col:
+                    rows.sort(
+                        key=lambda r: r.get(self._order_col) or "",
+                        reverse=self._order_desc,
+                    )
+                if self._limit_val is not None:
+                    rows = rows[: self._limit_val]
+                result.data = rows
 
-        if self._op == "insert":
-            row = self._db.insert(self._data or {})
-            result.data = [row]
+        elif self._table == "matches":
+            if self._op == "upsert":
+                if self._ignore_duplicates:
+                    inserted = self._matches_db.upsert_ignore_dup(self._data or {})
+                    result.data = [inserted] if inserted is not None else []
+                else:
+                    row = self._matches_db.upsert_overwrite(self._data or {})
+                    result.data = [row]
+            elif self._op == "select":
+                rows = self._matches_db.select_all()
+                for col, val in self._filters:
+                    rows = [r for r in rows if r.get(col) == val]
+                result.data = rows
+            else:
+                result.data = []
 
-        elif self._op == "update":
-            result.data = self._db.update_matching(self._filters, self._data or {})
-
-        elif self._op == "select":
-            rows = self._db.select_matching(self._filters)
-            if self._order_col:
-                rows.sort(
-                    key=lambda r: r.get(self._order_col) or "",
-                    reverse=self._order_desc,
+        elif self._table == "jobs":
+            if self._op == "upsert":
+                row = self._jobs_db.upsert(self._data or {})
+                result.data = [row]
+            elif self._op == "select":
+                # _resolve_job_id does SELECT id WHERE dedup_key=...
+                dedup_key_filter = next(
+                    (val for col, val in self._filters if col == "dedup_key"), None
                 )
-            if self._limit_val is not None:
-                rows = rows[: self._limit_val]
-            result.data = rows
+                if dedup_key_filter is not None:
+                    row = self._jobs_db.select_by_dedup_key(dedup_key_filter)
+                    result.data = [row] if row is not None else []
+                else:
+                    result.data = []
+            else:
+                result.data = []
+
+        else:
+            result.data = []
 
         return result
 
 
 class FakeSupabase:
-    """Minimal Supabase-like object routing through FakeRunsDB."""
+    """Minimal Supabase-like object routing through FakeRunsDB, FakeMatchesDB, FakeJobsDB."""
 
-    def __init__(self, db: FakeRunsDB):
-        self._db = db
+    def __init__(
+        self,
+        runs_db: FakeRunsDB,
+        matches_db: "_FakeMatchesDB | None" = None,
+        jobs_db: "_FakeJobsDB | None" = None,
+    ):
+        self._runs_db = runs_db
+        self._matches_db = matches_db or _FakeMatchesDB()
+        self._jobs_db = jobs_db or _FakeJobsDB()
 
     def table(self, name: str) -> _FakeQueryBuilder:
-        return _FakeQueryBuilder(self._db, name)
+        return _FakeQueryBuilder(self._runs_db, self._matches_db, self._jobs_db, name)
 
 
 # ---------------------------------------------------------------------------
-# Fake upload helper
+# Fake upload + write helpers (patched in tests that don't use the real loop)
 # ---------------------------------------------------------------------------
 
 def _fake_upload_docx(supabase, user_id, job, score, data) -> str:
     return f"fake/{user_id}/{score}_{job.dedup_key}.docx"
 
 
-def _fake_write_match(supabase, user_id, job, res, ats_report, cv_docx_path, run_id=None) -> None:
+def _fake_write_assessment(supabase, user_id, job, assessment_result, run_id=None) -> None:
     pass
 
 
@@ -286,7 +400,9 @@ def _make_app_overrides(runs_db: FakeRunsDB, user_id: str, jobs: list[Job], monk
     """Wire all offline fakes into the app and return (tc, runs_db, user_state)."""
     import api.run as run_mod
 
-    fake_supabase = FakeSupabase(runs_db)
+    matches_db = _FakeMatchesDB()
+    jobs_db = _FakeJobsDB()
+    fake_supabase = FakeSupabase(runs_db, matches_db, jobs_db)
     fake_user_state = FakeUserState()
     fake_job_store = FakeJobStore()
     fake_llm = FakeLLM()
@@ -294,7 +410,7 @@ def _make_app_overrides(runs_db: FakeRunsDB, user_id: str, jobs: list[Job], monk
 
     # Patch storage + DB-write helpers (not injected via DI) so no real calls.
     monkeypatch.setattr(run_mod, "_upload_docx", _fake_upload_docx)
-    monkeypatch.setattr(run_mod, "_write_match", _fake_write_match)
+    monkeypatch.setattr(run_mod, "_write_assessment", _fake_write_assessment)
     # Patch make_supabase_client so _run_background gets the fake client.
     monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_supabase)
 
@@ -526,15 +642,15 @@ class TestBackgroundTask:
     def _setup(self) -> tuple[FakeRunsDB, str, FakeSupabase]:
         db = FakeRunsDB()
         run_id = db.insert({"user_id": FAKE_USER_ID, "status": "running"})["id"]
-        sb = FakeSupabase(db)
+        matches_db = _FakeMatchesDB()
+        jobs_db = _FakeJobsDB()
+        sb = FakeSupabase(db, matches_db, jobs_db)
         return db, run_id, sb
 
     def test_successful_run_sets_done(self, monkeypatch):
         import api.run as run_mod
 
         db, run_id, fake_sb = self._setup()
-        monkeypatch.setattr(run_mod, "_upload_docx", _fake_upload_docx)
-        monkeypatch.setattr(run_mod, "_write_match", _fake_write_match)
         monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
 
         _run_background(
@@ -555,10 +671,11 @@ class TestBackgroundTask:
 
         row = db.get(run_id)
         assert row["status"] == "done", f"expected done, got: {row}"
-        # 2 WORLDWIDE jobs, both above pre_min_fit (88) and min_fit (80 default).
+        # 2 WORLDWIDE jobs — both above pre_min_fit (88 >= 20).
         assert row["scraped"] == 2
-        assert row["processed"] == 2   # both passed the filter step
-        assert row["generated"] == 2   # both survived scoring and got packages
+        assert row["processed"] == 2    # both passed the filter step
+        # generated = assessments saved (not packages); both saved → 2
+        assert row["generated"] == 2
         assert row["skipped_low_fit"] == 0
         assert row["summary"] is not None
         assert row["error"] is None
@@ -567,8 +684,6 @@ class TestBackgroundTask:
         import api.run as run_mod
 
         db, run_id, fake_sb = self._setup()
-        monkeypatch.setattr(run_mod, "_upload_docx", _fake_upload_docx)
-        monkeypatch.setattr(run_mod, "_write_match", _fake_write_match)
         monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
 
         _run_background(
@@ -629,8 +744,6 @@ class TestBackgroundTask:
 
         db, run_id, fake_sb = self._setup()
         monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
-        monkeypatch.setattr(run_mod, "_upload_docx", _fake_upload_docx)
-        monkeypatch.setattr(run_mod, "_write_match", _fake_write_match)
 
         class BoomLLM:
             def complete(self, **_kw) -> str:
@@ -682,6 +795,200 @@ class TestBackgroundTask:
         )
         # Row stays as-is (DB was unreachable), but process didn't crash.
         assert db.get(run_id)["status"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# Tests: assess-only loop semantics (NEW in C3)
+# ---------------------------------------------------------------------------
+
+class TestAssessOnlyLoop:
+    """Verify the new assess-only loop behavior: no packages, no min_fit drop,
+    generated = assessments saved, skipped_low_fit = Haiku drops only."""
+
+    def _setup(self) -> tuple[FakeRunsDB, str, FakeSupabase, "_FakeMatchesDB"]:
+        db = FakeRunsDB()
+        run_id = db.insert({"user_id": FAKE_USER_ID, "status": "running"})["id"]
+        matches_db = _FakeMatchesDB()
+        jobs_db = _FakeJobsDB()
+        sb = FakeSupabase(db, matches_db, jobs_db)
+        return db, run_id, sb, matches_db
+
+    def test_all_haiku_passing_jobs_are_assessed(self, monkeypatch):
+        """All jobs passing pre_min_fit=20 are assessed and saved, even if
+        fit_score would have been below the old min_fit=45 gate."""
+        import api.run as run_mod
+
+        db, run_id, fake_sb, matches_db = self._setup()
+        monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
+
+        # LLM returns fit_score=25, which is >= pre_min_fit(20) but < old min_fit(45).
+        # Under the old loop, this would have been dropped. Under the new loop, it's saved.
+        low_fit_payload = {**ASSESS_PAYLOAD, "fit_score": 25}
+
+        class LowFitLLM:
+            def complete(self, *, model, system, messages, max_tokens) -> str:
+                return json.dumps(low_fit_payload)
+
+        _run_background(
+            run_id=run_id,
+            user_id=FAKE_USER_ID,
+            params=SearchParams(
+                keywords=["support"], locations=["WW"],
+                period_hours=168, work_format="remote", loose=False, targeted=False,
+            ),
+            cv_markdown=FAKE_CV_MD,
+            short_profile=FAKE_SHORT_PROFILE,
+            config=PlatformConfig(),
+            scraper=lambda p, c: _make_jobs(2),
+            job_store=FakeJobStore(),
+            user_state=FakeUserState(),
+            llm=LowFitLLM(),
+        )
+
+        row = db.get(run_id)
+        assert row["status"] == "done"
+        # Both jobs should be saved even though fit=25 < old min_fit=45
+        assert row["generated"] == 2, f"expected 2 assessments saved, got: {row['generated']}"
+        assert row["skipped_low_fit"] == 0
+
+    def test_skipped_low_fit_counts_only_haiku_drops(self, monkeypatch):
+        """skipped_low_fit counts ONLY jobs dropped by the Haiku pre-filter (<20)."""
+        import api.run as run_mod
+
+        db, run_id, fake_sb, matches_db = self._setup()
+        monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
+
+        # Return fit_score=10, below pre_min_fit=20 → Haiku drop
+        below_pre_payload = {**ASSESS_PAYLOAD, "fit_score": 10}
+
+        class VeryLowFitLLM:
+            def complete(self, *, model, system, messages, max_tokens) -> str:
+                return json.dumps(below_pre_payload)
+
+        _run_background(
+            run_id=run_id,
+            user_id=FAKE_USER_ID,
+            params=SearchParams(
+                keywords=["support"], locations=["WW"],
+                period_hours=168, work_format="remote", loose=False, targeted=False,
+            ),
+            cv_markdown=FAKE_CV_MD,
+            short_profile=FAKE_SHORT_PROFILE,
+            config=PlatformConfig(),
+            scraper=lambda p, c: _make_jobs(2),
+            job_store=FakeJobStore(),
+            user_state=FakeUserState(),
+            llm=VeryLowFitLLM(),
+        )
+
+        row = db.get(run_id)
+        assert row["status"] == "done"
+        assert row["skipped_low_fit"] == 2  # both dropped by Haiku (<20)
+        assert row["generated"] == 0  # none saved
+
+    def test_assessment_has_generation_status_none(self, monkeypatch):
+        """_write_assessment must write generation_status='none' (no package yet)."""
+        import api.run as run_mod
+
+        db, run_id, fake_sb, matches_db = self._setup()
+        monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
+
+        _run_background(
+            run_id=run_id,
+            user_id=FAKE_USER_ID,
+            params=SearchParams(
+                keywords=["support"], locations=["WW"],
+                period_hours=168, work_format="remote", loose=False, targeted=False,
+            ),
+            cv_markdown=FAKE_CV_MD,
+            short_profile=FAKE_SHORT_PROFILE,
+            config=PlatformConfig(),
+            scraper=lambda p, c: _make_jobs(1),
+            job_store=FakeJobStore(),
+            user_state=FakeUserState(),
+            llm=FakeLLM(),
+        )
+
+        saved = matches_db.select_all()
+        assert len(saved) == 1
+        assert saved[0]["generation_status"] == "none"
+        assert saved[0]["status"] == "ASSESSED"
+        # No tailored_ or cover_letter in the match row (assessment-only)
+        analysis = saved[0].get("analysis", {})
+        assert "tailored_summary" not in analysis
+        assert "tailored_skills" not in analysis
+        assert "cover_letter" not in saved[0]
+
+
+# ---------------------------------------------------------------------------
+# Tests: run_id first-run invariant (ON CONFLICT DO NOTHING)
+# ---------------------------------------------------------------------------
+
+class TestRunIdFirstRunInvariant:
+    """Criterion #4: first encounter of a vacancy WINS; run_id is never overwritten."""
+
+    def test_repeat_assess_does_not_overwrite_run_id(self, monkeypatch):
+        """Two runs for the same job: first run's run_id must be preserved."""
+        import api.run as run_mod
+
+        db = FakeRunsDB()
+        matches_db = _FakeMatchesDB()
+        jobs_db = _FakeJobsDB()
+        fake_sb = FakeSupabase(db, matches_db, jobs_db)
+
+        run_id_1 = db.insert({"user_id": FAKE_USER_ID, "status": "running"})["id"]
+        run_id_2 = db.insert({"user_id": FAKE_USER_ID, "status": "running"})["id"]
+
+        # Shared job (same dedup_key → same job_id)
+        jobs = _make_jobs(1)
+        user_state = FakeUserState()  # fresh state — does NOT track processed
+
+        monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
+
+        common_params = SearchParams(
+            keywords=["support"], locations=["WW"],
+            period_hours=168, work_format="remote", loose=False, targeted=False,
+        )
+
+        # First run
+        _run_background(
+            run_id=run_id_1,
+            user_id=FAKE_USER_ID,
+            params=common_params,
+            cv_markdown=FAKE_CV_MD,
+            short_profile=FAKE_SHORT_PROFILE,
+            config=PlatformConfig(),
+            scraper=lambda p, c: list(jobs),  # same jobs
+            job_store=FakeJobStore(),
+            user_state=FakeUserState(),  # fresh user_state per run for test isolation
+            llm=FakeLLM(),
+        )
+
+        saved_after_run1 = matches_db.select_all()
+        assert len(saved_after_run1) == 1
+        assert saved_after_run1[0]["run_id"] == run_id_1
+
+        # Second run: same job, different run_id — ON CONFLICT DO NOTHING should preserve run_id_1
+        _run_background(
+            run_id=run_id_2,
+            user_id=FAKE_USER_ID,
+            params=common_params,
+            cv_markdown=FAKE_CV_MD,
+            short_profile=FAKE_SHORT_PROFILE,
+            config=PlatformConfig(),
+            scraper=lambda p, c: list(jobs),  # same jobs
+            job_store=FakeJobStore(),
+            user_state=FakeUserState(),  # fresh user_state (is_processed returns False)
+            llm=FakeLLM(),
+        )
+
+        saved_after_run2 = matches_db.select_all()
+        # Still only one row (ON CONFLICT DO NOTHING)
+        assert len(saved_after_run2) == 1, f"expected 1 row, got: {len(saved_after_run2)}"
+        # run_id must still be the first run's id
+        assert saved_after_run2[0]["run_id"] == run_id_1, (
+            f"expected run_id={run_id_1!r}, got {saved_after_run2[0]['run_id']!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -957,21 +1264,21 @@ class TestAttributionSeam:
 
         app.dependency_overrides.clear()
 
-    def test_write_match_receives_run_id_in_background_loop(self, monkeypatch):
-        """_run_background must pass run_id to _write_match for every match."""
+    def test_write_assessment_receives_run_id_in_background_loop(self, monkeypatch):
+        """_run_background must pass run_id to _write_assessment for every match."""
         import api.run as run_mod
 
         db = FakeRunsDB()
         run_id = db.insert({"user_id": FAKE_USER_ID, "status": "running"})["id"]
-        fake_sb = FakeSupabase(db)
+        matches_db = _FakeMatchesDB()
+        fake_sb = FakeSupabase(db, matches_db)
 
         captured_run_ids: list[str | None] = []
 
-        def _capturing_write_match(supabase, user_id, job, res, ats_report, cv_docx_path, run_id=None):
+        def _capturing_write_assessment(supabase, user_id, job, assessment_result, run_id=None):
             captured_run_ids.append(run_id)
 
-        monkeypatch.setattr(run_mod, "_upload_docx", _fake_upload_docx)
-        monkeypatch.setattr(run_mod, "_write_match", _capturing_write_match)
+        monkeypatch.setattr(run_mod, "_write_assessment", _capturing_write_assessment)
         monkeypatch.setattr(run_mod, "make_supabase_client", lambda: fake_sb)
 
         _run_background(
@@ -990,7 +1297,7 @@ class TestAttributionSeam:
             llm=FakeLLM(),
         )
 
-        # Both generated matches must carry the correct run_id.
+        # Both assessed matches must carry the correct run_id.
         assert len(captured_run_ids) == 2, f"expected 2 calls, got: {captured_run_ids}"
         for rid in captured_run_ids:
             assert rid == run_id, f"expected run_id={run_id!r}, got {rid!r}"
@@ -1010,7 +1317,7 @@ class TestMatchDetailNullableRunId:
         row_without_run_id = {
             "id": str(uuid.uuid4()),
             # run_id absent — simulates a pre-0009 row
-            "status": "GENERATED",
+            "status": "ASSESSED",
             "fit_score": 75,
             "b2b_eligible": "no",
             "analysis": {},
@@ -1035,7 +1342,7 @@ class TestMatchDetailNullableRunId:
         detail = MatchDetail(
             id=str(uuid.uuid4()),
             run_id=fake_run_id,
-            status="GENERATED",
+            status="ASSESSED",
             fit_score=88,
         )
         assert detail.run_id == fake_run_id

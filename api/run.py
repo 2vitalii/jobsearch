@@ -1,15 +1,28 @@
-"""The Run endpoint — orchestrates the per-user scrape/score/package loop.
+"""The Run endpoint — orchestrates the per-user scrape/assess loop.
 
 Mirrors jobsearch.pipeline.main, but: one user at a time, state in Supabase
-(processed_jobs / matches) instead of flat files, the tailored .docx in the
-private ``packages`` bucket instead of a local folder, and asynchronous via
+(processed_jobs / matches) instead of flat files, and asynchronous via
 FastAPI BackgroundTasks (SG-03).
 
 Background task design
 -----------------------
-POST /run returns 202 immediately with a ``run_id``. The scrape→score→package
+POST /run returns 202 immediately with a ``run_id``. The scrape→score→assess
 loop runs in the background, writing progress to the ``runs`` table. The
 client polls GET /run/{run_id} or GET /run/latest for status.
+
+Loop semantics (assess-only, no generation):
+- score_fit (Haiku): pre-filter. Drops < pre_min_fit (20). Counted as skipped_low_fit.
+- assess (Sonnet): full assessment for all Haiku-passing jobs. No min_fit drop —
+  ALL jobs >= 20 are saved as ASSESSED matches with generation_status='none'.
+- generation_status='none': means assessed but no tailored CV/cover generated yet.
+  Packages are generated on-demand via POST /matches/{id}/generate.
+- The 'generated' counter in RunStatus now counts assessments saved (matches created),
+  NOT packages. The RunStatus schema/Zod contract is unchanged.
+
+run_id first-run invariant (criterion #4):
+- _write_assessment uses upsert with ignore_duplicates=True (ON CONFLICT DO NOTHING).
+- First encounter of a vacancy WINS: run_id is locked to the first run forever.
+- Repeat assess of the same vacancy (e.g. different run) is silently ignored.
 
 The background function uses a dedicated service_role client (NOT the
 request-scoped user session). This is the single documented exception to the
@@ -42,8 +55,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from jobsearch import filters, render
-from jobsearch.models import Job, PlatformConfig, SearchParams
-from jobsearch.scoring import analyze, score_fit
+from jobsearch.models import Assessment, Job, PlatformConfig, SearchParams
+from jobsearch.scoring import assess, score_fit
 from jobsearch.supabase_store import _job_row, make_supabase_client
 
 from .auth import CurrentUser, get_current_user
@@ -91,7 +104,7 @@ class RunStatus(BaseModel):
     status: RunStatusValue
     scraped: int
     processed: int       # was "queued" in the old synchronous RunSummary
-    generated: int
+    generated: int       # now counts assessments saved (matches created), not packages
     skipped_low_fit: int
     summary: dict | None = None
     error: str | None = None
@@ -103,7 +116,7 @@ class RunSummary(BaseModel):
     The background task writes this as ``runs.summary`` on completion."""
     scraped: int
     queued: int          # kept as "queued" in the jsonb for backwards compat
-    generated: int
+    generated: int       # now counts assessments saved (matches created), not packages
     skipped_low_fit: int
 
 
@@ -137,18 +150,35 @@ def _upload_docx(supabase, user_id: str, job: Job, score: int, data: bytes) -> s
     return path
 
 
-def _write_match(supabase, user_id: str, job: Job, res, ats_report: str, cv_docx_path: str, run_id: str | None = None) -> None:
+def _write_assessment(
+    supabase,
+    user_id: str,
+    job: Job,
+    assessment_result: Assessment,
+    run_id: str | None = None,
+) -> None:
+    """Write an assessment-only match row.
+
+    Writes fit_score, b2b_eligible, status='ASSESSED', generation_status='none',
+    analysis={reason, jd_keywords, ats_present, ats_missing, gaps, recruiter_verdict},
+    job_* denormalized fields, and run_id.
+
+    Does NOT write cover_letter, ats_report, cv_docx_path — those are written
+    by _generate_background when the user requests package generation.
+
+    run_id first-run invariant: uses ON CONFLICT DO NOTHING (ignore_duplicates=True)
+    so a repeat assessment for the same (user_id, job_id) is silently ignored and
+    the original run_id is preserved forever. This is intentional — first run wins.
+    """
     job_id = _resolve_job_id(supabase, job)
     row = {
         "user_id": user_id,
         "job_id": job_id,
         "run_id": run_id,
-        "status": "GENERATED",
-        "fit_score": res.fit_score,
-        "b2b_eligible": res.b2b,
-        "cover_letter": res.cover_letter,
-        "ats_report": ats_report,
-        "cv_docx_path": cv_docx_path,
+        "status": "ASSESSED",
+        "generation_status": "none",
+        "fit_score": assessment_result.fit_score,
+        "b2b_eligible": assessment_result.b2b,
         # Denormalized job display fields (SG-02): the per-user matches path reads
         # these instead of joining the RLS-closed jobs pool.
         "job_title": job.title,
@@ -159,17 +189,20 @@ def _write_match(supabase, user_id: str, job: Job, res, ats_report: str, cv_docx
         # did not supply a date).  Stored as-is — do NOT substitute now()/created_at.
         "job_posted_date": job.date_posted or None,
         "analysis": {
-            "reason": res.reason,
-            "jd_keywords": res.jd_keywords,
-            "ats_present": res.ats_present,
-            "ats_missing": res.ats_missing,
-            "tailored_summary": res.tailored_summary,
-            "tailored_skills": res.tailored_skills,
-            "gaps": res.gaps,
-            "recruiter_verdict": res.recruiter_verdict,
+            "reason": assessment_result.reason,
+            "jd_keywords": assessment_result.jd_keywords,
+            "ats_present": assessment_result.ats_present,
+            "ats_missing": assessment_result.ats_missing,
+            "gaps": assessment_result.gaps,
+            "recruiter_verdict": assessment_result.recruiter_verdict,
         },
     }
-    supabase.table("matches").upsert(row, on_conflict="user_id,job_id").execute()
+    # ON CONFLICT DO NOTHING: first run wins; run_id is never overwritten.
+    # is_processed guard prevents re-queuing the same dedup_key, but this
+    # DB-level guard is the final safety net in case of any race or bug.
+    supabase.table("matches").upsert(
+        row, on_conflict="user_id,job_id", ignore_duplicates=True
+    ).execute()
 
 
 def _load_search_params(supabase, user_id: str) -> SearchParams:
@@ -226,7 +259,7 @@ def _mark_run_failed(supabase, run_id: str, error: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Background task — the actual scrape/score/package loop
+# Background task — the actual scrape/score/assess loop (no generation)
 # ---------------------------------------------------------------------------
 
 def _run_background(
@@ -241,7 +274,10 @@ def _run_background(
     user_state,
     llm,
 ) -> None:
-    """Execute the scrape→filter→score→package loop as a background task.
+    """Execute the scrape→filter→score→assess loop as a background task.
+
+    NO package generation here — generation is deferred to POST /matches/{id}/generate.
+    The 'generated' counter counts assessments saved (matches created), not packages.
 
     Service_role client note: this function is called AFTER the HTTP response
     has been sent. There is no active user JWT at this point, so we build a
@@ -330,12 +366,15 @@ def _run_background(
         _update_run(supabase, run_id, processed=len(queue))
 
         # -----------------------------------------------------------------
-        # Score / analyze / package loop.
+        # Score / assess loop (no package generation).
+        # generated = number of assessments saved (matches created this run).
+        # skipped_low_fit = Haiku drops only (< pre_min_fit=20).
+        # There is NO min_fit gate here — all Haiku-passing jobs are assessed.
         # -----------------------------------------------------------------
-        generated = 0
+        generated = 0   # counts assessments saved (matches created), not packages
         skipped_low_fit = 0
         for job in queue:
-            # Step 1 (cheap, Haiku): pre-filter.
+            # Step 1 (cheap, Haiku): pre-filter. Drops < pre_min_fit (default 20).
             pre = score_fit(job, short_profile, config, llm)
             if pre.fit_score < config.pre_min_fit:
                 user_state.mark_processed(user_id, job.dedup_key)
@@ -343,19 +382,15 @@ def _run_background(
                 _update_run(supabase, run_id, skipped_low_fit=skipped_low_fit)
                 continue
 
-            # Step 2 (expensive, Sonnet): full tailoring only for survivors.
-            res = analyze(job, cv_markdown, config, llm)
-            if res.fit_score < config.min_fit:
-                user_state.mark_processed(user_id, job.dedup_key)
-                skipped_low_fit += 1
-                _update_run(supabase, run_id, skipped_low_fit=skipped_low_fit)
-                continue
+            # Step 2 (expensive, Sonnet): assess ALL Haiku-passing jobs.
+            # No min_fit drop — every job >= 20 gets saved to matches.
+            a = assess(job, cv_markdown, config, llm)
 
-            pkg = render.build_package(job, res, cv_markdown)
-            cv_docx_path = _upload_docx(supabase, user_id, job, res.fit_score, pkg.cv_docx)
-            _write_match(supabase, user_id, job, res, pkg.ats_report, cv_docx_path, run_id=run_id)
+            # Write assessment to matches with generation_status='none'.
+            # ON CONFLICT DO NOTHING: first run wins (run_id never overwritten).
+            _write_assessment(supabase, user_id, job, a, run_id=run_id)
             user_state.mark_processed(user_id, job.dedup_key)
-            generated += 1
+            generated += 1   # count matches saved
             _update_run(supabase, run_id, generated=generated)
 
         # -----------------------------------------------------------------
@@ -421,8 +456,8 @@ def run(
       5. Schedule the background task.
       6. Return 202 {run_id}.
 
-    The actual scrape/score/package loop runs in _run_background() after the
-    response is sent.
+    The actual scrape/score/assess loop runs in _run_background() after the
+    response is sent. No package generation happens here — use POST /matches/{id}/generate.
     """
     uid = user.user_id
 
