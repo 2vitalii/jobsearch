@@ -246,7 +246,7 @@ def _generate_background(
         )
         if not match_res.data:
             logger.error("_generate_background: match %s not found for user %s", match_id, user_id)
-            supabase.table("matches").update({"generation_status": "failed"}).eq("id", match_id).execute()
+            supabase.table("matches").update({"generation_status": "failed"}).eq("id", match_id).eq("user_id", user_id).execute()
             return
 
         match_row = match_res.data[0]
@@ -318,7 +318,7 @@ def _generate_background(
             "ats_report": pkg.ats_report,
             "cv_docx_path": cv_docx_path,
             "analysis": updated_analysis,
-        }).eq("id", match_id).execute()
+        }).eq("id", match_id).eq("user_id", user_id).execute()
 
     except Exception as exc:
         # Sanitize: only log the class name to the user-facing field.
@@ -328,6 +328,6 @@ def _generate_background(
             match_id, user_id, safe_error,
         )
         try:
-            supabase.table("matches").update({"generation_status": "failed"}).eq("id", match_id).execute()
+            supabase.table("matches").update({"generation_status": "failed"}).eq("id", match_id).eq("user_id", user_id).execute()
         except Exception:
             logger.exception("_generate_background: failed to set generation_status=failed for match %s", match_id)
