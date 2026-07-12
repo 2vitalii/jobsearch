@@ -4,9 +4,9 @@ jobsearch.pipeline — тонкий CLI поверх ядра скоринга (
 и персонального состояния (store).
 
 Читает накопленный пул jobs_*.csv -> применяет текущие фильтры -> по каждой
-вакансии: Haiku-предфильтр -> Sonnet-тюнинг -> комплект (в памяти) -> запись на
-диск + воронка. Вся LLM-логика и рендер живут в scoring/render; состояние — в
-store. Сам этот модуль только оркеструет I/O на краю.
+вакансии: Haiku-предфильтр -> Sonnet-ассессмент -> Sonnet-генерация -> комплект
+(в памяти) -> запись на диск + воронка. Вся LLM-логика и рендер живут в
+scoring/render; состояние — в store. Сам этот модуль только оркеструет I/O на краю.
 
 Запуск:
   pip install -e .
@@ -24,8 +24,8 @@ import time
 
 from . import filters, render
 from .config import load_platform_config
-from .models import Job
-from .scoring import AnthropicClient, analyze, score_fit
+from .models import Job, MatchResult
+from .scoring import AnthropicClient, assess, generate, score_fit
 from .store import LOCAL_USER, FlatFileUserState
 
 MASTER_CV = "master_cv.md"
@@ -155,14 +155,19 @@ def main():
                 time.sleep(1)
                 continue
 
-            # Шаг 2 (дорого, Sonnet): полный тюнинг только для прошедших
-            res = analyze(job, cv_text, config, client)
-            if res.fit_score < config.min_fit:
+            # Шаг 2a (дорого, Sonnet): оценка соответствия (assess)
+            a = assess(job, cv_text, config, client)
+            if a.fit_score < config.min_fit:
                 state.mark_processed(user, job.url)
-                print(f"  [{res.fit_score:>3}] {title} — ниже порога после тюнинга, пропуск")
+                print(f"  [{a.fit_score:>3}] {title} — ниже порога после оценки, пропуск")
                 time.sleep(1)
                 continue
 
+            # Шаг 2b (дорого, Sonnet): генерация материалов (generate)
+            g = generate(job, cv_text, a, config, client)
+
+            # Объединяем в MatchResult для render.build_package (не изменяем render)
+            res = MatchResult.from_assessment_and_generation(a, g)
             pkg = render.build_package(job, res, cv_text)
             folder = write_package(pkg, job, res.fit_score, review_dir)
             state.save_application(user, job, res, folder)

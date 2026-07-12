@@ -50,11 +50,17 @@ def test_score_fit_untrusted_text_only_in_user_position():
 
 
 def test_analyze_builds_matchresult_and_isolates_inputs():
+    """analyze() is now a thin wrapper: assess + generate → MatchResult.
+    The fake LLM returns the same payload for both calls; we check the combined result
+    and the security invariant (untrusted desc only in user message, not in system)."""
     payload = {
+        # assessment fields (used by assess)
         "fit_score": 64, "b2b_eligible": "maybe", "reason": "r",
         "jd_keywords": ["sql"], "ats_present": ["api"], "ats_missing": ["k8s"],
+        "gaps": "g", "recruiter_verdict": "maybe",
+        # generation fields (used by generate)
         "tailored_summary": "summ", "tailored_skills": ["Cat: a, b"],
-        "gaps": "g", "recruiter_verdict": "maybe", "cover_letter": "Dear team,",
+        "cover_letter": "Dear team,",
     }
     client = FakeClient(payload)
     cfg = PlatformConfig()
@@ -64,13 +70,15 @@ def test_analyze_builds_matchresult_and_isolates_inputs():
     assert mr.cover_letter == "Dear team,"
     assert mr.tailored_skills == ["Cat: a, b"]
 
-    call = client.calls[0]
-    assert call["model"] == cfg.model_tailor
-    assert call["max_tokens"] == 4000
-    sys_text = " ".join(b["text"] for b in call["system"])
+    # analyze() makes TWO calls: assess (call[0]) + generate (call[1])
+    assert len(client.calls) == 2
+    assess_call = client.calls[0]
+    assert assess_call["model"] == cfg.model_tailor
+    assert assess_call["max_tokens"] == 2000
+    sys_text = " ".join(b["text"] for b in assess_call["system"])
     assert "SECRET-DESC" not in sys_text          # scraped desc not in system
     assert "MASTER CV TEXT" in sys_text           # CV rides in a cached system block
-    assert "SECRET-DESC" in call["messages"][0]["content"]
+    assert "SECRET-DESC" in assess_call["messages"][0]["content"]
 
 
 def test_parse_json_tolerates_fences_and_trailing():
