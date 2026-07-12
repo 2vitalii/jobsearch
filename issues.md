@@ -47,6 +47,7 @@ this as a minor TODO — it directly drives monetisation and the user's trust in
   Known limitation: substring keyword match may miss synonyms (e.g. "support engineer" won't match "Customer Care Specialist"). Mitigated by score_fit/analyze as authoritative relevance gate + loose=True flag.
 - [~] feat: location normalization + EU expansion + combo cap + suggest-roles from CV. Branch feat/coverage-multirole-locations. 3 commits (e86a0ee, 0505639, 7e18d7a). Awaiting PM Gate 2 before PR. No migrations required.
   Known pre-existing issue (not caused by this branch): test_api_search_params::test_put_persists_and_get_returns_same fails when ANTHROPIC_API_KEY is set and real Supabase is reachable — the response includes exclude_senior:false which the test payload doesn't expect. Offline pytest (no creds) stays 355 passed.
+- [~] feat: assess/generate split. Branch feat/assess-generate-split. 5 commits (f64eb43, ccb5696, 90c7835, e7d5953, f52a9c4). Awaiting PM Gate 2 before PR. Migration 0012 must be applied by hand in Supabase SQL Editor BEFORE merging. Notes: (1) _write_match renamed to _write_assessment; (2) pre_min_fit changed 35→20; (3) no min_fit gate in run loop; (4) generation_status column required (0012); (5) POST /matches/{id}/generate requires .neq() on the real supabase-py client (standard PostgREST filter, already supported).
 
 ## Closed (recent)
 <!-- - [x] description — commit hash -->
